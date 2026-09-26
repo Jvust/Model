@@ -27,7 +27,8 @@ TASK_THREADS = int(
     )
 )
 TASK_GPU_LAYERS = int(os.environ.get("MODEL_TASK_GPU_LAYERS", "0"))
-TASK_CONTEXT = int(os.environ.get("MODEL_TASK_CONTEXT", "8192"))
+TASK_CONTEXT = int(os.environ.get("MODEL_TASK_CONTEXT", "4096"))
+TASK_BATCH = int(os.environ.get("MODEL_TASK_BATCH", str(TASK_CONTEXT)))
 TASK_READY_TIMEOUT = float(os.environ.get("MODEL_TASK_READY_TIMEOUT", "300"))
 
 EMBEDDING_FILE = "Qwen3-Embedding-0.6B-Q8_0.gguf"
@@ -221,6 +222,7 @@ class TaskRuntime:
                 "threads": TASK_THREADS,
                 "gpu_layers": TASK_GPU_LAYERS,
                 "context": TASK_CONTEXT,
+                "batch": TASK_BATCH,
                 "error": self.error,
                 "logs": list(self.logs)[-30:],
                 "supported_adapters": [
@@ -350,6 +352,12 @@ class TaskRuntime:
             str(TASK_GPU_LAYERS),
             "--ctx-size",
             str(TASK_CONTEXT),
+            "--batch-size",
+            str(TASK_BATCH),
+            "--ubatch-size",
+            str(TASK_BATCH),
+            "--parallel",
+            "1",
             "--no-webui",
             *tuple(adapter["flags"]),
         ]
@@ -436,8 +444,8 @@ class TaskRuntime:
         inputs = [item.strip() for item in inputs if item.strip()]
         if not inputs or len(inputs) > 64:
             raise ValueError("Embedding input count must be between 1 and 64.")
-        if sum(len(item) for item in inputs) > 131072:
-            raise ValueError("Embedding input is too large.")
+        if any(len(item) > 16000 for item in inputs):
+            raise ValueError("单条 Embedding 文本过长；第一版 task server 限制约 4096 tokens。")
 
         status, result = json_request(
             f"http://127.0.0.1:{TASK_PORT}/v1/embeddings",
@@ -463,8 +471,8 @@ class TaskRuntime:
         docs = [str(item).strip() for item in documents if str(item).strip()]
         if not docs or len(docs) > 100:
             raise ValueError("documents count must be between 1 and 100.")
-        if len(query) + sum(len(item) for item in docs) > 262144:
-            raise ValueError("Reranker input is too large.")
+        if any(len(query) + len(item) > 16000 for item in docs):
+            raise ValueError("单个 query/document 对过长；第一版 task server 限制约 4096 tokens。")
 
         try:
             top_n = int(payload.get("top_n", len(docs)))
