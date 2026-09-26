@@ -6,6 +6,21 @@ Google Drive is the canonical model vault. The website discovers model packages 
 
 **Google Drive for desktop is not required.**
 
+## Drive package manifests
+
+Directory-based model runtimes need more than weight files. Index v3 also preserves small JSON/TXT/YAML/YML support metadata and exposes `supportFiles` + `manifestFiles` without changing the existing weight-only `files` contract.
+
+Runtime v0.16 can reconstruct a full Drive package under `D:\Model\packages` through:
+
+    GET  /v1/packages/status
+    POST /v1/packages/materialize
+    POST /v1/packages/stop
+
+The materializer reuses the resumable Drive cache and hard-links large cached artifacts into the package directory, so future Diffusers/Transformers workers do not need to redownload a repository or keep a second giant copy.
+
+This is specifically required for the existing Wan2.2 T2V/I2V Drive packages: their high/low-noise models are sharded Diffusers directories with index/config files, not single ComfyUI UNET files.
+
+See `docs/DRIVE_PACKAGE_MANIFESTS.md`.
 ## Embedding and reranker task runtime
 
 Qwen3 Embedding 0.6B and Qwen3 Reranker 0.6B use a dedicated llama.cpp task server instead of adding PyTorch/Transformers to the Windows Runtime package.
@@ -187,7 +202,7 @@ FLUX.2 defaults: 1024×1024, 4 steps, CFG 1.0, Euler. See `docs/FLUX2_KLEIN_BOOT
 
 ## Hardware preflight
 
-Runtime v0.15 checks hardware before starting large local workloads.
+Runtime v0.16 checks hardware before starting large local workloads.
 
 - managed ComfyUI: detects `nvidia-smi`, CUDA version, GPU/VRAM and cache free space;
 - Pony image safety floor: 8 GB VRAM;
