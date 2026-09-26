@@ -108,7 +108,7 @@ Large models still need enough local disk space for the cache. The desktop Drive
 
 模型登记、Drive 文件和运行适配器是三个不同状态。网页会展示登记表中的全部模型，但只有同时满足“Drive 主库有权重”和“对应运行适配器已接通”的模型才会出现启动入口。
 
-目前已经接通网页自动运行的模型包括 Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF 图像工作流、Wan2.2 TI2V 5B 和 HunyuanVideo 1.5 视频工作流，以及 Drive 中实际存在聊天 GGUF 文件时的 llama.cpp 聊天链路。OCR、Embedding、Reranker、时间序列及尚未完成依赖验证的图像模型继续只显示运行方案。
+目前已经接通网页 Runtime adapter 的模型包括 Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF、FLUX.2 Klein 4B FP8 图像工作流、Wan2.2 TI2V 5B 和 HunyuanVideo 1.5 视频工作流，以及 Drive 中实际存在聊天 GGUF 文件时的 llama.cpp 聊天链路。FLUX.2 只有在两个 companion 文件补齐后才显示直接使用。OCR、Embedding、Reranker、时间序列及尚未完成依赖验证的图像模型继续只显示运行方案。
 
 模型卡片上的“查看运行方案”只会读取本机后端和模型状态，不会把任意 .safetensors、.pth 或 .ckpt 文件假设成可以直接启动的模型。这样可以避免下载大量文件后才发现缺少 VAE、文本编码器、预处理器或工作流。
 
@@ -128,6 +128,7 @@ Automatic web adapters now include:
 - GGUF → Drive API cache → llama.cpp → web chat.
 - Pony Diffusion V6 XL → Drive API cache → managed ComfyUI SDXL workflow → web image workspace.
 - Qwen-Image 2.1 GGUF → linked Drive folder → Drive API cache → managed ComfyUI + ComfyUI-GGUF → web image workspace.
+- FLUX.2 Klein 4B FP8 → exact three-file Drive package → managed ComfyUI distilled 4-step workflow → web image workspace.
 - Wan2.2 TI2V 5B → managed ComfyUI → web video workspace.
 - HunyuanVideo 1.5 T2V → managed ComfyUI → web video workspace.
 
@@ -155,15 +156,24 @@ Current direct image adapters:
 
 Qwen-Image remains in its existing Drive root folder. The website links that folder into the model index at scan time instead of copying roughly 14 GB of weights into `AI-Model-Vault`. First Qwen use installs the small ComfyUI-GGUF custom node/dependencies into the managed ComfyUI runtime, then reuses them.
 
-FLUX.2 Klein 4B FP8 remains **adapter required** until its complete companion-component/runtime path is verified; a `.safetensors` file alone is not treated as runnable.
+FLUX.2 Klein 4B FP8 now has a fixed Runtime adapter, but direct use remains gated by three exact Drive artifacts:
+
+- `flux-2-klein-4b-fp8.safetensors` — existing official BFL FP8 main file;
+- `text_encoders/qwen_3_4b.safetensors`;
+- `vae/flux2-vae.safetensors`.
+
+If either companion is missing, the model card shows **补齐 FLUX.2 依赖** and opens the Drive-first bootstrap notebook instead of starting a task. The notebook resumes downloads, verifies official SHA256 values, and never redownloads a valid main FP8 file.
+
+FLUX.2 defaults: 1024×1024, 4 steps, CFG 1.0, Euler. See `docs/FLUX2_KLEIN_BOOTSTRAP.md`.
 
 ## Hardware preflight
 
-Runtime v0.12 checks hardware before starting large local workloads.
+Runtime v0.14 checks hardware before starting large local workloads.
 
 - managed ComfyUI: detects `nvidia-smi`, CUDA version, GPU/VRAM and cache free space;
 - Pony image safety floor: 8 GB VRAM;
 - Qwen-Image 2.1 GGUF safety floor: 14 GB VRAM and 18 GB free cache space;
+- FLUX.2 Klein 4B FP8 safety floor: 10 GB VRAM and 15 GB free cache space;
 - Wan2.2 TI2V 5B safety floor: 12 GB VRAM;
 - HunyuanVideo 1.5 safety floor: 16 GB VRAM;
 - managed ComfyUI keeps at least 10 GB cache free space before launch;
@@ -229,10 +239,10 @@ Production:
 
 - 本机聊天：GGUF / llama.cpp
 - 本机视频：Wan2.2、HunyuanVideo
-- 图像生成：Pony Diffusion V6 XL 与 Qwen-Image 2.1 GGUF 已接通；其他模型继续显示 ComfyUI / Diffusers 运行方案
+- 图像生成：Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF、FLUX.2 Klein 4B FP8 adapter 已接通；FLUX.2 companion 未齐时显示依赖补齐入口
 - 图像编辑：局部重绘、扩图、放大
 - 视觉 / OCR：Transformers 运行方案
 - 向量检索：Embedding / Rerank 知识库入口
 - 时序预测：PyTorch 预测入口
 
-图像、视觉、检索和时序工作区会先检查本机后端，并保留模型家族适配边界；Pony 与 Qwen-Image 图像工作区已经能够提交真实任务并回传结果。模型库卡片仍是模型包与 Drive 元数据的唯一来源。
+图像、视觉、检索和时序工作区会先检查本机后端，并保留模型家族适配边界；Pony、Qwen-Image 与文件齐全后的 FLUX.2 会复用同一图像任务/结果回传接口。模型库卡片仍是模型包与 Drive 元数据的唯一来源。

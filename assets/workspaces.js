@@ -161,6 +161,14 @@
     ) {
       return { width: 768, height: 768, steps: 20, cfg: 1.0 };
     }
+    if (
+      hay.includes("flux2_klein_4b_fp8") ||
+      hay.includes("flux.2-klein-4b-fp8") ||
+      hay.includes("flux2-klein-4b-fp8") ||
+      hay.includes("flux2 klein 4b fp8")
+    ) {
+      return { width: 1024, height: 1024, steps: 4, cfg: 1.0 };
+    }
     return { width: 1024, height: 1024, steps: 28, cfg: 5.0 };
   }
 
@@ -184,7 +192,7 @@
       starting: "正在准备图像任务",
       preparing_comfyui: "正在准备 ComfyUI",
       downloading_model: "正在从 Drive 准备模型缓存",
-      building_workflow: "正在构建 Pony SDXL 工作流",
+      building_workflow: "正在构建图像工作流",
       queued: "任务已提交",
       generating: "正在生成图像",
       complete: "图像生成完成",

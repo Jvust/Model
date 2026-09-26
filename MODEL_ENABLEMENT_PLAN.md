@@ -143,7 +143,7 @@
 
 - 第一阶段：已在 PR #17 实现启动入口的后端/硬件门禁；GGUF 需要检测到 llama.cpp，managed ComfyUI 图像/视频需要硬件检查通过，否则仅显示运行方案。
 - 第二阶段：Pony Diffusion V6 XL 已加入固定 checkpoint 校验、Drive 断点缓存、managed ComfyUI SDXL 工作流、网页图像任务和结果回传；Windows 打包冒烟测试已覆盖新 API。
-- 第二阶段：FLUX.2 Klein 4B FP8 继续保持“需要适配器”，因为当前 Drive 只有 FP8 主权重，companion components 尚未完整，不允许仅凭 .safetensors 扩展名启用。
+- 第二阶段：FLUX.2 Klein 4B FP8 的 Runtime adapter 已完成；现有 4.07GB FP8 主权重已确认是官方 single-file，当前真实阻塞收敛为缺少 `qwen_3_4b.safetensors` 与 `flux2-vae.safetensors` 两个 companion。网页在二者缺失时显示“补齐 FLUX.2 依赖”，不显示直接使用。
 - 后续优先级保持不变：补一个真实小型 GGUF → 专用任务模型 → 远程 NVIDIA Runtime → 更多模型家族。
 
 - 第三阶段前置：已建立 llm / reasoning / code / multimodal / ocr / rag / timeseries / novel Vault 分类目录；当前仍未发现聊天用 GGUF，因此不把任何聊天登记项标记为可启动。
@@ -164,6 +164,11 @@
 - 远程模式使用 Tailscale Serve 专用 HTTPS 8443 端口反向代理到 NVIDIA 主机的 `127.0.0.1:8765`；不使用 Funnel，不让 Runtime 监听 LAN/public 地址。
 - Runtime v0.13 支持可选 256-bit 令牌；远程脚本自动生成并写入 NVIDIA 主机配置，网页令牌只放 `sessionStorage`。
 - 已加入 `Enable-Remote-Nvidia.cmd` / `Disable-Remote-Nvidia.cmd` 和完整文档；当前状态是“实现完成、真实双机验收待做”，不能标记为跨设备已验证。
+
+- 第二阶段继续推进（FLUX.2）：Runtime v0.14 增加固定 distilled 4-step ComfyUI graph，严格要求 FP8 diffusion + Qwen3-4B encoder + FLUX2 VAE 三文件。
+- Drive 引导器已写入 `AI-Model-Vault/notebook_launchers/启动_FLUX2-klein-4b-fp8_补齐依赖_DriveFirst.ipynb`；它只补下载缺失的 encoder/VAE，现有 4.07GB 主权重只做官方大小/SHA256 校验，不重复下载。
+- 当前固定 ComfyUI v0.37.0 已确认包含 `Flux2Scheduler` 与 `EmptyFlux2LatentImage`；Runtime 仍会在任务前查询 `/object_info`，缺节点时拒绝执行。
+- 状态边界：adapter 已接通不等于 Drive 已 ready；在 companion notebook 实际跑完并重新扫描前，FLUX.2 仍保持“Drive 文件不完整/补齐依赖”状态。
 
 ## 完成定义
 

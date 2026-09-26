@@ -8,7 +8,7 @@ Build a Drive-first AI model website where Google Drive remains the model vault,
 
 ## Current state
 
-Status: **v0.13 private remote NVIDIA Runtime implemented / validation pending**
+Status: **v0.14 FLUX.2 Klein adapter + companion bootstrap prepared / hardware validation pending**
 
 Verified on the live site before this branch:
 
@@ -60,7 +60,8 @@ Implemented on this branch:
 - The website offers the bootstrap action only when no real chat GGUF is scanned; this does not mark the model ready before the weight actually exists.
 - Unregistered GGUF packages under explicit chat-like Vault roots can route to llama.cpp, while mixed image GGUF packages remain protected by category/runtime routing.
 - The current managed ComfyUI package remains NVIDIA Windows/CUDA based; AMD-only machines are reported as hardware unsupported.
-- FLUX.2 Klein 4B FP8 remains adapter-required until its companion-component/runtime path is verified; it is not promoted merely because a single safetensors file exists.
+- FLUX.2 Klein 4B FP8 now has a fixed distilled 4-step ComfyUI adapter. Its existing 4.07GB BFL FP8 single-file is valid; direct use stays blocked until `qwen_3_4b.safetensors` and `flux2-vae.safetensors` are present in the same Drive package.
+- A Drive-first FLUX.2 companion bootstrap notebook is stored under `AI-Model-Vault/notebook_launchers`; it validates official sizes/SHA256 and writes `MODEL_READY.json` only after all three files pass.
 - Other ComfyUI/Diffusers model families remain future adapters.
 
 ## Architecture invariants
@@ -108,7 +109,7 @@ Implemented on this branch:
 | Backend | Detection | Automatic launch |
 | --- | --- | --- |
 | llama.cpp | yes | yes, via Drive API cache |
-| ComfyUI | managed/runtime detection + hardware gate | Pony Diffusion V6 XL + Qwen-Image 2.1 GGUF image, Wan2.2 TI2V 5B + HunyuanVideo 1.5 T2V on supported NVIDIA Windows hardware |
+| ComfyUI | managed/runtime detection + hardware gate | Pony Diffusion V6 XL + Qwen-Image 2.1 GGUF + FLUX.2 Klein 4B FP8 image, Wan2.2 TI2V 5B + HunyuanVideo 1.5 T2V on supported NVIDIA Windows hardware; FLUX.2 direct use also requires its two companion files |
 | Remote NVIDIA transport | Tailscale Serve + Runtime token | implemented; real two-device validation pending |
 | Diffusers | yes | not yet |
 | Transformers | yes | not yet |
@@ -119,7 +120,7 @@ Implemented on this branch:
 ## Next technical steps
 
 1. Validate Pony Diffusion V6 XL and Qwen-Image 2.1 GGUF end-to-end on a supported NVIDIA Windows Runtime and record VRAM/RAM/disk observations.
-2. Verify FLUX.2 Klein 4B FP8 companion components and then add its fixed image adapter; keep using existing Drive assets or linked sources rather than duplicate large model trees.
+2. Run/validate the prepared FLUX.2 companion bootstrap, confirm encoder + VAE appear beside the existing FP8 main file, rescan, then validate one real 1024×1024 / 4-step image on a supported NVIDIA Runtime.
 3. Run/validate the prepared Qwen3-0.6B Q8_0 Drive bootstrap, confirm the verified GGUF appears under `llm/Qwen3-0.6B-GGUF`, then validate the full Drive cache → llama.cpp → web-chat round trip.
 4. Add GOT-OCR, Qwen Embedding, Qwen Reranker and Chronos/TimesFM weights to their new Vault categories, then enable their task adapters/workspaces; Drive audit currently finds no reusable weight copies.
 5. Validate the implemented Tailscale Serve remote NVIDIA path on two real devices (AMD/no-NVIDIA client + separate NVIDIA Windows host), including Drive session sync, progress polling and returned image/video media.

@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from runtime.image_runtime import (
     ADAPTERS,
@@ -6,6 +7,10 @@ from runtime.image_runtime import (
     QWEN_TEXT_ENCODER,
     QWEN_UNET,
     QWEN_VAE,
+    FLUX2_KLEIN_FP8,
+    FLUX2_TEXT_ENCODER,
+    FLUX2_VAE,
+    ImageRuntime,
     adapter_for,
     artifact_specs,
     build_prompt,
@@ -107,10 +112,85 @@ class ImageAdapterTests(unittest.TestCase):
         self.assertEqual(prompt["6"]["inputs"]["scheduler"], "simple")
         self.assertEqual(prompt["8"]["class_type"], "SaveImage")
 
-    def test_rejects_unadapted_flux(self):
-        self.assertIsNone(
-            adapter_for("FLUX.2 Klein 4B FP8", "flux2_klein_4b_fp8")
+    def test_matches_flux2_klein_fp8(self):
+        matched = adapter_for(
+            "FLUX.2 Klein 4B FP8",
+            "flux2_klein_4b_fp8",
+            "image_base/black-forest-labs__FLUX.2-klein-4b-fp8",
         )
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched[0], "flux2_klein_4b_fp8")
+
+    def test_flux2_requires_three_artifacts(self):
+        specs = artifact_specs(
+            {
+                "files": [
+                    {
+                        "id": "testFlux2Unet123456789",
+                        "name": FLUX2_KLEIN_FP8,
+                        "size": 4_070_624_520,
+                    },
+                    {
+                        "id": "testFlux2Clip123456789",
+                        "name": FLUX2_TEXT_ENCODER,
+                        "size": 8_044_982_048,
+                    },
+                    {
+                        "id": "testFlux2Vae1234567890",
+                        "name": FLUX2_VAE,
+                        "size": 336_213_556,
+                    },
+                ]
+            },
+            ADAPTERS["flux2_klein_4b_fp8"],
+        )
+        self.assertEqual(set(specs), {"unet", "clip", "vae"})
+        self.assertEqual(specs["unet"].name, FLUX2_KLEIN_FP8)
+
+    def test_flux2_rejects_missing_companion(self):
+        with self.assertRaises(FileNotFoundError):
+            artifact_specs(
+                {
+                    "files": [
+                        {
+                            "id": "testFlux2Unet123456789",
+                            "name": FLUX2_KLEIN_FP8,
+                            "size": 4_070_624_520,
+                        }
+                    ]
+                },
+                ADAPTERS["flux2_klein_4b_fp8"],
+            )
+
+    def test_builds_flux2_distilled_prompt(self):
+        prompt = build_prompt(
+            {
+                "unet": FLUX2_KLEIN_FP8,
+                "clip": FLUX2_TEXT_ENCODER,
+                "vae": FLUX2_VAE,
+            },
+            {
+                "prompt": "studio photo of a glass sculpture",
+                "width": 1024,
+                "height": 1024,
+                "steps": 4,
+                "cfg": 1.0,
+                "seed": 99,
+            },
+            ADAPTERS["flux2_klein_4b_fp8"],
+            "fluxjob",
+        )
+        self.assertEqual(prompt["1"]["class_type"], "UNETLoader")
+        self.assertEqual(prompt["1"]["inputs"]["unet_name"], FLUX2_KLEIN_FP8)
+        self.assertEqual(prompt["2"]["inputs"]["type"], "flux2")
+        self.assertEqual(prompt["5"]["class_type"], "ConditioningZeroOut")
+        self.assertEqual(prompt["8"]["class_type"], "Flux2Scheduler")
+        self.assertEqual(prompt["8"]["inputs"]["steps"], 4)
+        self.assertEqual(prompt["9"]["class_type"], "CFGGuider")
+        self.assertEqual(prompt["9"]["inputs"]["cfg"], 1.0)
+        self.assertEqual(prompt["10"]["class_type"], "EmptyFlux2LatentImage")
+        self.assertEqual(prompt["11"]["class_type"], "SamplerCustomAdvanced")
+        self.assertEqual(prompt["13"]["class_type"], "SaveImage")
 
     def test_selects_complete_drive_checkpoint(self):
         spec = checkpoint_spec(
@@ -157,6 +237,55 @@ class ImageAdapterTests(unittest.TestCase):
                 },
                 ADAPTERS["pony_diffusion_v6_xl"],
             )
+
+    def test_required_node_value_validation_accepts_flux2(self):
+        runtime = object.__new__(ImageRuntime)
+        adapter = {
+            "label": "FLUX.2",
+            "required_nodes": ("CLIPLoader",),
+            "required_node_values": {
+                "CLIPLoader": {"type": "flux2"},
+            },
+        }
+        object_info = {
+            "CLIPLoader": {
+                "input": {
+                    "required": {
+                        "type": [["stable_diffusion", "qwen_image", "flux2"]]
+                    }
+                }
+            }
+        }
+        with mock.patch(
+            "runtime.image_runtime.json_request",
+            return_value=object_info,
+        ):
+            runtime._verify_required_nodes(adapter)
+
+    def test_required_node_value_validation_rejects_old_clip_loader(self):
+        runtime = object.__new__(ImageRuntime)
+        adapter = {
+            "label": "FLUX.2",
+            "required_nodes": ("CLIPLoader",),
+            "required_node_values": {
+                "CLIPLoader": {"type": "flux2"},
+            },
+        }
+        object_info = {
+            "CLIPLoader": {
+                "input": {
+                    "required": {
+                        "type": [["stable_diffusion", "qwen_image"]]
+                    }
+                }
+            }
+        }
+        with mock.patch(
+            "runtime.image_runtime.json_request",
+            return_value=object_info,
+        ):
+            with self.assertRaises(RuntimeError):
+                runtime._verify_required_nodes(adapter)
 
     def test_builds_sdxl_comfy_prompt(self):
         prompt = build_prompt(
