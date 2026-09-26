@@ -22,6 +22,7 @@ try:
     from .drive_cache import DriveCache, DriveFileSpec
     from .hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from .model_capabilities import all_capabilities
+    from .task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from .image_runtime import (
         ImageRuntime,
         adapter_for as image_adapter_for,
@@ -39,6 +40,7 @@ except ImportError:
     from drive_cache import DriveCache, DriveFileSpec
     from hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from model_capabilities import all_capabilities
+    from task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from image_runtime import (
         ImageRuntime,
         adapter_for as image_adapter_for,
@@ -610,14 +612,16 @@ class RuntimeState:
 STATE = RuntimeState()
 VIDEO = VideoRuntime()
 IMAGE = ImageRuntime(VIDEO, DRIVE_CACHE, DRIVE_SESSION.get)
+TASK = TaskRuntime(DRIVE_CACHE, DRIVE_SESSION.get, resolve_llama_server)
 atexit.register(STATE.stop)
+atexit.register(TASK.stop)
 atexit.register(IMAGE.shutdown)
 atexit.register(VIDEO.shutdown)
 
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DriveModelBridge/0.14"
+    server_version = "DriveModelBridge/0.15"
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -738,7 +742,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "Drive Model Local Runtime",
-                    "version": 14,
+                    "version": 15,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 },
             )
@@ -782,12 +786,20 @@ class Handler(BaseHTTPRequestHandler):
                     "ready_warn_seconds": MODEL_READY_WARN_SECONDS,
                     "video": VIDEO.snapshot(),
                     "image": IMAGE.snapshot(),
+                    "task": TASK.snapshot(),
                     "hardware": runtime_hardware_snapshot(),
-                    "runtime_version": 14,
+                    "runtime_version": 15,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 }
             )
             self._json(200, payload)
+            return
+
+        if path == "/v1/tasks/status":
+            if not self._origin_allowed():
+                self._json(403, {"error": "Origin not allowed."})
+                return
+            self._json(200, TASK.snapshot())
             return
 
         if path == "/v1/models/capabilities":
@@ -862,6 +874,23 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             payload = self._read_json()
+
+            if path == "/v1/tasks/start":
+                result = TASK.start(payload)
+                self._json(202, {"ok": True, "task": result})
+                return
+
+            if path == "/v1/tasks/stop":
+                self._json(200, {"ok": True, "task": TASK.stop()})
+                return
+
+            if path == "/v1/tasks/embeddings":
+                self._json(200, {"ok": True, "result": TASK.embeddings(payload)})
+                return
+
+            if path == "/v1/tasks/rerank":
+                self._json(200, {"ok": True, "result": TASK.rerank(payload)})
+                return
 
             if path == "/v1/chat/completions":
                 snapshot = STATE.snapshot()
@@ -1123,7 +1152,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Drive Model Local Runtime v0.14")
+    print("Drive Model Local Runtime v0.15")
     print(f"Bridge: http://{HOST}:{BRIDGE_PORT}")
     print("Drive source: Google Drive API (no desktop mount required)")
     print("Cache root:", DRIVE_CACHE.root)
@@ -1142,6 +1171,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        TASK.stop()
         IMAGE.shutdown()
         VIDEO.shutdown()
         STATE.stop()
