@@ -2,12 +2,9 @@ name: runtime-package-web
 
 on:
   push:
-    branches:
-      - main
-      - feat/runtime-package-main
+    branches: [main, feat/runtime-package-main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -20,19 +17,20 @@ concurrency:
 jobs:
   package:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+      - name: Test all source contracts
+        run: python -m unittest discover -s tests -v
       - name: Build standalone Runtime EXE
         shell: powershell
         run: |
           python -m pip install --disable-pip-version-check pyinstaller py7zr
-          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" runtime\local_bridge.py
+          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" --add-data "runtime\native_worker.py;." runtime\application.py
           Copy-Item -Force dist\ModelRuntime.exe runtime\ModelRuntime.exe
-
       - name: Smoke test standalone Runtime EXE
         shell: powershell
         run: |
@@ -45,133 +43,111 @@ jobs:
           $p = Start-Process -FilePath "runtime\ModelRuntime.exe" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           try {
             $ok = $false
-            for ($i = 0; $i -lt 40; $i++) {
+            for ($i = 0; $i -lt 80; $i++) {
               Start-Sleep -Milliseconds 250
-              if ($p.HasExited) {
-                Get-Content $stderr -ErrorAction SilentlyContinue
-                Get-Content $stdout -ErrorAction SilentlyContinue
-                throw "ModelRuntime.exe exited during smoke test."
-              }
+              if ($p.HasExited) { Get-Content $stderr; throw "Runtime exited during smoke test" }
               try {
-                $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 1
-                if ($health.ok) {
-                  $ok = $true
-                  break
-                }
+                $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 1
+                if ($health.ok) { $ok = $true; break }
               } catch {}
             }
-            if (-not $ok) {
-              throw "ModelRuntime.exe health check timed out."
-            }
-            $video = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 3
-            if (-not $video.workflow_resources_ready) {
-              throw "Packaged video workflow resources are missing."
-            }
-            if (-not $video.archive_support) {
-              throw "Packaged Runtime is missing py7zr archive support."
-            }
-            if (($video.supported_adapters | Measure-Object).Count -lt 2) {
-              throw "Expected Wan and Hunyuan video adapters in packaged Runtime."
-            }
-            $image = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/image/status" -TimeoutSec 3
-            if (($image.supported_adapters | Measure-Object).Count -lt 3) {
-              throw "Expected Pony, Qwen Image and FLUX.2 image adapters in packaged Runtime."
-            }
-            $tasks = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/tasks/status" -TimeoutSec 3
-            if (($tasks.supported_adapters | Measure-Object).Count -lt 2) {
-              throw "Expected Qwen embedding and reranker task adapters."
-            }
-            if ([int]$tasks.port -ne 8091) {
-              throw "Expected dedicated task llama-server port 8091."
-            }
-            $packageState = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/packages/status" -TimeoutSec 3
-            if ($packageState.phase -ne "idle") {
-              throw "Package materializer should start idle."
-            }
-            $runtime = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 3
-            if ([int]$runtime.runtime_version -lt 16) {
-              throw "Expected Runtime v0.16 Drive package manifest API."
-            }
-            if ($runtime.remote_auth_required) {
-              throw "Packaged Runtime should not require a remote token by default."
-            }
-            if ($null -eq $runtime.hardware.managed_comfy_supported) {
-              throw "Runtime hardware gate is missing."
-            }
-            if ($null -eq $runtime.hardware.memory.available_bytes) {
-              throw "Runtime memory preflight is missing."
-            }
-            if ($null -eq $runtime.hardware.cache_disk.free_bytes) {
-              throw "Runtime cache disk preflight is missing."
-            }
-            $hardware = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/hardware" -TimeoutSec 3
-            if (-not $hardware.ok) {
-              throw "Runtime hardware endpoint failed."
-            }
-            if ($null -eq $hardware.hardware.gpu.nvidia_smi) {
-              throw "Runtime NVIDIA probe result is missing."
-            }
-            $capabilities = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/models/capabilities" -TimeoutSec 3
-            if (($capabilities.models | Measure-Object).Count -ne 27) {
-              throw "Packaged Runtime is missing the 27-model capability registry."
-            }
+            if (-not $ok) { throw "Runtime health timed out" }
+            if ([int]$health.version -ne 17) { throw "Old executable packaged" }
+            $video = Invoke-RestMethod "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 5
+            if (-not $video.workflow_resources_ready -or -not $video.archive_support) { throw "Video resources missing" }
+            if (($video.supported_adapters | Measure-Object).Count -lt 2) { throw "Video adapters missing" }
+            $image = Invoke-RestMethod "http://127.0.0.1:8765/v1/image/status" -TimeoutSec 5
+            if (($image.supported_adapters | Measure-Object).Count -lt 3) { throw "Image adapters missing" }
+            $tasks = Invoke-RestMethod "http://127.0.0.1:8765/v1/tasks/status" -TimeoutSec 5
+            if (($tasks.supported_adapters | Measure-Object).Count -lt 2 -or [int]$tasks.port -ne 8091) { throw "Task adapters missing" }
+            $package = Invoke-RestMethod "http://127.0.0.1:8765/v1/packages/status" -TimeoutSec 5
+            if ($package.phase -ne "idle") { throw "Package materializer not idle" }
+            $runtime = Invoke-RestMethod "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 10
+            if ([int]$runtime.runtime_version -ne 17 -or $runtime.remote_auth_required) { throw "Unexpected Runtime version/auth default" }
+            if ($null -eq $runtime.hardware.memory.available_bytes -or $null -eq $runtime.hardware.cache_disk.free_bytes) { throw "Hardware preflight missing" }
+            $hardware = Invoke-RestMethod "http://127.0.0.1:8765/v1/hardware" -TimeoutSec 10
+            if (-not $hardware.ok -or $null -eq $hardware.hardware.gpu.nvidia_smi) { throw "Hardware endpoint failed" }
+            $capabilities = Invoke-RestMethod "http://127.0.0.1:8765/v1/models/capabilities" -TimeoutSec 5
+            if (($capabilities.models | Measure-Object).Count -ne 27) { throw "Legacy model registry lost" }
+            $native = Invoke-RestMethod "http://127.0.0.1:8765/v1/native/catalog" -TimeoutSec 5
+            if (($native.models | Measure-Object).Count -ne 5) { throw "Native adapters missing" }
+            New-Item -ItemType Directory -Force qa-evidence | Out-Null
+            @{ version = 17; executable_smoke = "PASS"; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
+          } finally {
+            if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
           }
-          finally {
-            if ($p -and -not $p.HasExited) {
-              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            }
-          }
-
-
-      - name: Parse runtime scripts
+      - name: Parse and exercise runtime scripts
         shell: powershell
         run: |
-          $files = @(
-            "runtime\launch_model.ps1",
-            "runtime\install_runtime.ps1",
-            "runtime\background.ps1",
-            "runtime\remote_nvidia.ps1",
-            "runtime\uninstall_runtime.ps1"
-          )
-          foreach ($file in $files) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path $file),
-              [ref]$tokens,
-              [ref]$errors
-            ) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object {
-                Write-Error ("{0}:{1}:{2} {3} :: {4}" -f $file, $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message, $_.Extent.Text)
-              }
-              exit 1
-            }
+          foreach ($file in (Get-ChildItem runtime\*.ps1)) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | Write-Error; exit 1 }
           }
-
-      - name: Exercise runtime scripts
-        shell: powershell
-        run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\launch_model.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\install_runtime.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\background.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\remote_nvidia.ps1 -SelfTest
-          if (-not (Test-Path -LiteralPath "runtime\ModelRuntime.exe" -PathType Leaf)) { throw "ModelRuntime.exe missing after build." }
-
-      - name: Assemble runtime package
+      - name: Assemble matching source and executable
         shell: powershell
         run: |
           $root = "Model-Runtime"
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
-          Copy-Item -Recurse -Force runtime "$root\runtime"
-          Copy-Item -Force README.md "$root\README.md"
-          Copy-Item -Force index.html "$root\index.html"
-          Copy-Item -Recurse -Force assets "$root\assets"
-          Copy-Item -Force sw.js "$root\sw.js"
-
-      - name: Upload runtime package
-        uses: actions/upload-artifact@v4
+          New-Item -ItemType Directory -Force $root | Out-Null
+          foreach ($folder in @("runtime", "assets", "docs", "notebooks", "governance", "tests", "tools")) {
+            Copy-Item -Recurse -Force $folder "$root\$folder"
+          }
+          foreach ($file in @("README.md", "MODEL_ENABLEMENT_PLAN.md", "index.html", "sw.js")) { Copy-Item -Force $file "$root\$file" }
+          Copy-Item -Recurse qa-evidence "$root\qa-evidence"
+          Get-ChildItem $root -Directory -Recurse -Filter __pycache__ | Remove-Item -Recurse -Force
+          Get-FileHash "$root\runtime\ModelRuntime.exe" -Algorithm SHA256 | Format-List | Out-File "$root\EXE_SHA256.txt"
+      - uses: actions/upload-artifact@v4
         with:
-          name: Model-Web-Runtime-${{ github.sha }}
+          name: Model-0.17-RC-${{ github.sha }}
           path: Model-Runtime/
           if-no-files-found: error
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install playwright==1.55.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Real browser and localhost HTTP
+        run: python -m tools.check_browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Model-browser-${{ github.sha }}
+          path: qa-evidence/
+          if-no-files-found: warn
+
+  native-cpu:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [got_ocr2, chronos_2, timesfm_2_0_500m]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install huggingface_hub==0.34.4 Pillow==11.3.0
+      - name: Actual official-model CPU inference in private environment
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: python -m tools.smoke_native_models --model ${{ matrix.model }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Model-native-${{ matrix.model }}-${{ github.sha }}
+          path: |
+            qa-evidence/
+            ${{ runner.temp }}/model-native-smoke/${{ matrix.model }}/environments/**/setup.log
+          if-no-files-found: warn

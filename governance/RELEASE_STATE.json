@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "0.17-rc1",
+  "status": "IMPLEMENTED_PENDING_REAL_MODEL_ACCEPTANCE",
+  "baseline_commit": "eb930ca76b74777435f204946e5dd11d4236ca8a",
+  "entrypoint": "runtime/application.py",
+  "acceptance_document": "docs/RELEASE_ACCEPTANCE.md",
+  "added_native_adapters": ["got_ocr2", "chronos_2", "timesfm_2_0_500m", "wan22_t2v_a14b", "wan22_i2v_a14b"],
+  "source_contract_tests_added": 63,
+  "local_source_contract_result": "PASS",
+  "local_browser_dom_checks": 7,
+  "browser_transport": "MOCKED_OFFLINE_NOT_OAUTH_OR_INFERENCE",
+  "windows_ci_result": "CHECK_ATTACHED_COMMIT_ACTIONS",
+  "model_inference_verified": false,
+  "drive_weights_downloaded_by_this_change": false,
+  "automatic_main_merge_authorized": false,
+  "remaining_gates": [
+    "actual chat and task GGUF inference on the intended host",
+    "real image and video generation on supported NVIDIA hardware",
+    "real GOT OCR and Chronos/TimesFM forecasts",
+    "Windows cold cache, resumed downloads, and warm cache reuse",
+    "two-device private HTTPS and authenticated returned media"
+  ]
+}

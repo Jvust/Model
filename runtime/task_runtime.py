@@ -309,6 +309,8 @@ class TaskRuntime:
             raise ValueError("这个专用任务模型还没有 llama.cpp task adapter。")
         adapter_id, adapter = matched
         spec = task_file_spec(payload, adapter)
+        if not self.executable_provider():
+            raise FileNotFoundError("llama-server is missing; no model download was started")
         token = self.token_provider()
 
         self.stop()
@@ -347,7 +349,7 @@ class TaskRuntime:
         def progress(received: int, total: int | None) -> None:
             with self.lock:
                 if self.job_id != job_id:
-                    return
+                    raise InterruptedError("Task download cancelled")
                 self.downloaded_bytes = int(received)
                 self.download_total_bytes = int(total) if total else None
 
