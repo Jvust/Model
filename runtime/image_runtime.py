@@ -157,16 +157,19 @@ ADAPTERS = {
             "unet": {
                 "name": FLUX2_KLEIN_FP8,
                 "min_bytes": 4_000_000_000,
+                "expected_bytes": 4_070_624_520,
                 "directories": ("diffusion_models",),
             },
             "clip": {
                 "name": FLUX2_TEXT_ENCODER,
                 "min_bytes": 8_000_000_000,
+                "expected_bytes": 8_044_982_048,
                 "directories": ("text_encoders",),
             },
             "vae": {
                 "name": FLUX2_VAE,
                 "min_bytes": 330_000_000,
+                "expected_bytes": 336_213_556,
                 "directories": ("vae",),
             },
         },
@@ -240,8 +243,13 @@ def artifact_specs(payload: dict, adapter: dict) -> dict[str, DriveFileSpec]:
 
         spec = DriveFileSpec.from_payload(_normalize_file_payload(raw))
         minimum = int(requirement.get("min_bytes") or 0)
+        exact = int(requirement.get("expected_bytes") or 0)
         if spec.size is None:
             raise ValueError(f"{expected} 缺少 Drive 文件大小，无法确认完整性。")
+        if exact and spec.size != exact:
+            raise ValueError(
+                f"{expected} 文件大小不匹配：{spec.size} != {exact}。"
+            )
         if minimum and spec.size < minimum:
             raise ValueError(f"{expected} 文件大小异常，Drive 文件可能不完整。")
         result[str(role)] = spec
