@@ -108,7 +108,7 @@ Large models still need enough local disk space for the cache. The desktop Drive
 
 模型登记、Drive 文件和运行适配器是三个不同状态。网页会展示登记表中的全部模型，但只有同时满足“Drive 主库有权重”和“对应运行适配器已接通”的模型才会出现启动入口。
 
-目前已经接通网页自动运行的模型包括 Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF 图像工作流、Wan2.2 TI2V 5B 和 HunyuanVideo 1.5 视频工作流，以及 Drive 中实际存在聊天 GGUF 文件时的 llama.cpp 聊天链路。OCR、Embedding、Reranker、时间序列及尚未完成依赖验证的图像模型继续只显示运行方案。
+目前已经接通网页自动运行的图像适配器包括 Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF 和 FLUX.2 Klein 4B FP8；其中 FLUX.2 只有在 Drive 的固定三文件齐全后才会提供直接使用入口。视频侧已接通 Wan2.2 TI2V 5B 和 HunyuanVideo 1.5，聊天侧在 Drive 实际存在聊天 GGUF 时走 llama.cpp。OCR、Embedding、Reranker、时间序列及尚未完成依赖验证的图像模型继续只显示运行方案。
 
 模型卡片上的“查看运行方案”只会读取本机后端和模型状态，不会把任意 .safetensors、.pth 或 .ckpt 文件假设成可以直接启动的模型。这样可以避免下载大量文件后才发现缺少 VAE、文本编码器、预处理器或工作流。
 
@@ -128,6 +128,7 @@ Automatic web adapters now include:
 - GGUF → Drive API cache → llama.cpp → web chat.
 - Pony Diffusion V6 XL → Drive API cache → managed ComfyUI SDXL workflow → web image workspace.
 - Qwen-Image 2.1 GGUF → linked Drive folder → Drive API cache → managed ComfyUI + ComfyUI-GGUF → web image workspace.
+- FLUX.2 Klein 4B FP8 → exact three-file Drive package → managed ComfyUI official distilled graph → web image workspace.
 - Wan2.2 TI2V 5B → managed ComfyUI → web video workspace.
 - HunyuanVideo 1.5 T2V → managed ComfyUI → web video workspace.
 
@@ -142,28 +143,30 @@ First video use may download:
 
 Those files are cached under `D:\Model\video` by default and reused later. Set `MODEL_VIDEO_ROOT` to override the video cache only.
 
-See `docs/MULTI_BACKEND.md` for the remaining family adapters.
+See `docs/MULTI_BACKEND.md` for the remaining family adapters and `docs/FLUX2_KLEIN_BOOTSTRAP.md` for the exact FLUX.2 three-file/bootstrap boundary.
 
 ## Image workspace
 
 Select an adapted image model and click **使用图像模型**. Runtime validates every fixed artifact declared by that adapter, downloads/resumes only the selected Drive files into the persistent `D:\\Model` cache, prepares managed ComfyUI, submits the fixed workflow and streams the generated image back to the webpage.
 
-Current direct image adapters:
+Current image adapters:
 
 - Pony Diffusion V6 XL — 1024×1024 default, 28 steps, CFG 5, CLIP skip 2.
 - Qwen-Image 2.1 GGUF — 768×768 default, 20 steps, CFG 1.0; fixed files are `qwen-image-2.1-Q4_K_M.gguf`, `qwen3vl_8b_int8_convrot.safetensors`, and `qwen_image_2.1_vae_bf16.safetensors`.
+- FLUX.2 Klein 4B FP8 — 1024×1024 default, 4 steps, CFG 1.0, Euler; fixed files are `flux-2-klein-4b-fp8.safetensors`, `qwen_3_4b.safetensors`, and `flux2-vae.safetensors`.
 
 Qwen-Image remains in its existing Drive root folder. The website links that folder into the model index at scan time instead of copying roughly 14 GB of weights into `AI-Model-Vault`. First Qwen use installs the small ComfyUI-GGUF custom node/dependencies into the managed ComfyUI runtime, then reuses them.
 
-FLUX.2 Klein 4B FP8 remains **adapter required** until its complete companion-component/runtime path is verified; a `.safetensors` file alone is not treated as runnable.
+FLUX.2 Klein 4B FP8 now has a fixed web/Runtime adapter, but the canonical Drive package still needs the two official ComfyUI companions `qwen_3_4b.safetensors` and `flux2-vae.safetensors`. Until those files actually exist and pass the exact-file gate, the model card shows **补齐 FLUX.2 依赖** rather than **使用图像模型**. The Drive launcher is `AI-Model-Vault/notebook_launchers/补齐_FLUX2_Klein_4B_ComfyUI_依赖_DriveFirst.ipynb`; it never re-downloads the existing 4.07 GB FP8 transformer.
 
 ## Hardware preflight
 
-Runtime v0.12 checks hardware before starting large local workloads.
+Runtime v0.14 checks hardware before starting large local workloads.
 
 - managed ComfyUI: detects `nvidia-smi`, CUDA version, GPU/VRAM and cache free space;
 - Pony image safety floor: 8 GB VRAM;
 - Qwen-Image 2.1 GGUF safety floor: 14 GB VRAM and 18 GB free cache space;
+- FLUX.2 Klein 4B FP8 safety floor: 12 GB VRAM and 16 GB free cache space;
 - Wan2.2 TI2V 5B safety floor: 12 GB VRAM;
 - HunyuanVideo 1.5 safety floor: 16 GB VRAM;
 - managed ComfyUI keeps at least 10 GB cache free space before launch;
@@ -229,10 +232,10 @@ Production:
 
 - 本机聊天：GGUF / llama.cpp
 - 本机视频：Wan2.2、HunyuanVideo
-- 图像生成：Pony Diffusion V6 XL 与 Qwen-Image 2.1 GGUF 已接通；其他模型继续显示 ComfyUI / Diffusers 运行方案
+- 图像生成：Pony Diffusion V6 XL、Qwen-Image 2.1 GGUF 与 FLUX.2 Klein 4B FP8 已接入适配器；FLUX.2 需先补齐并校验两个 companion 文件
 - 图像编辑：局部重绘、扩图、放大
 - 视觉 / OCR：Transformers 运行方案
 - 向量检索：Embedding / Rerank 知识库入口
 - 时序预测：PyTorch 预测入口
 
-图像、视觉、检索和时序工作区会先检查本机后端，并保留模型家族适配边界；Pony 与 Qwen-Image 图像工作区已经能够提交真实任务并回传结果。模型库卡片仍是模型包与 Drive 元数据的唯一来源。
+图像、视觉、检索和时序工作区会先检查本机后端，并保留模型家族适配边界；Pony 与 Qwen-Image 已具备真实任务链路，FLUX.2 的真实生成链路将在 companion bootstrap 完成后通过同一图像工作区启用。模型库卡片仍是模型包与 Drive 元数据的唯一来源。
