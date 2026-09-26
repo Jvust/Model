@@ -147,6 +147,24 @@
     return fetch(runtimeBase() + path, options);
   }
 
+  function runtimeMediaUrl(kind, state) {
+    if (
+      window.ModelApp &&
+      typeof window.ModelApp.mediaUrl === "function"
+    ) {
+      return window.ModelApp.mediaUrl(kind, state);
+    }
+    const params = new URLSearchParams({
+      job_id: String(state && state.job_id || ""),
+      t: String(Date.now())
+    });
+    if (state && state.media_ticket && state.media_expires) {
+      params.set("ticket", String(state.media_ticket));
+      params.set("expires", String(state.media_expires));
+    }
+    return runtimeBase() + "/v1/" + kind + "/file?" + params.toString();
+  }
+
   function imageDefaults(model) {
     const hay = [
       model && model.id,
@@ -243,7 +261,7 @@
       if (state.phase === "complete" && state.job_id) {
         const preview = imagePreview();
         if (preview) {
-          preview.src = runtimeBase() + "/v1/image/file?job_id=" + encodeURIComponent(state.job_id) + "&t=" + Date.now();
+          preview.src = runtimeMediaUrl("image", state);
           preview.hidden = false;
         }
         if (run) run.disabled = false;
