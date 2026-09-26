@@ -1,8 +1,8 @@
 (function () {
   "use strict";
 
-  const CACHE_KEY = "drive-model-index-v2";
-  const CACHE_VERSION = 2;
+  const CACHE_KEY = "drive-model-index-v3";
+  const CACHE_VERSION = 3;
 
   const MODEL_EXTENSIONS = new Set([
     ".gguf",
@@ -15,6 +15,14 @@
     ".model",
     ".tflite"
   ]);
+
+  const SUPPORT_EXTENSIONS = new Set([
+    ".json",
+    ".txt",
+    ".yaml",
+    ".yml"
+  ]);
+  const MAX_SUPPORT_FILE_BYTES = 16 * 1024 * 1024;
 
   const LLAMA_TASK_MODEL_IDS = new Set([
     "qwen3_embedding_0_6b",
@@ -77,6 +85,19 @@
       return false;
     }
     return MODEL_EXTENSIONS.has(extensionOf(file.name));
+  }
+
+  function isPackageSupportFile(file) {
+    if (!file || file.mimeType === "application/vnd.google-apps.folder") {
+      return false;
+    }
+    const ext = extensionOf(file.name);
+    const size = Number(file.size || 0);
+    if (!SUPPORT_EXTENSIONS.has(ext)) return false;
+    if (!Number.isFinite(size) || size < 0 || size > MAX_SUPPORT_FILE_BYTES) {
+      return false;
+    }
+    return true;
   }
 
   function copyFile(file) {
@@ -306,18 +327,26 @@
 
   function flattenPackages(rootNode, registry = null) {
     const rawFiles = [];
+    const rawSupportFiles = [];
 
     function walk(node) {
       if (!node) return;
+      const relativePath = String(node.relativePath || "");
       if (
         node.file &&
-        isModelFile(node.file) &&
-        !String(node.relativePath || "").startsWith(".hf-cache/")
+        !relativePath.startsWith(".hf-cache/")
       ) {
-        rawFiles.push({
-          ...copyFile(node.file),
-          relativePath: String(node.relativePath || "")
-        });
+        if (isModelFile(node.file)) {
+          rawFiles.push({
+            ...copyFile(node.file),
+            relativePath
+          });
+        } else if (isPackageSupportFile(node.file)) {
+          rawSupportFiles.push({
+            ...copyFile(node.file),
+            relativePath
+          });
+        }
       }
       for (const child of node.children || []) walk(child);
     }
@@ -344,9 +373,25 @@
       if (!group.registry && entry) group.registry = entry;
     }
 
+    for (const file of rawSupportFiles) {
+      const entry = matchRegistry(file.relativePath, registry);
+      const root = packageRoot(file.relativePath, entry);
+      const key = root || file.relativePath;
+      const group = groups.get(key);
+      if (!group) continue;
+      group.supportFiles = group.supportFiles || [];
+      group.supportFiles.push(file);
+    }
+
     const packages = Array.from(groups.values()).map(group => {
       const entry = group.registry || null;
       const files = group.files.sort((a, b) =>
+        String(a.relativePath).localeCompare(String(b.relativePath))
+      );
+      const supportFiles = (group.supportFiles || []).sort((a, b) =>
+        String(a.relativePath).localeCompare(String(b.relativePath))
+      );
+      const manifestFiles = [...files, ...supportFiles].sort((a, b) =>
         String(a.relativePath).localeCompare(String(b.relativePath))
       );
       const gguf = files.find(file => extensionOf(file.name) === ".gguf");
@@ -382,7 +427,11 @@
         taskKind: taskKindFor(entry),
         packagePath: group.packagePath,
         files,
+        supportFiles,
+        manifestFiles,
         fileCount: files.length,
+        supportFileCount: supportFiles.length,
+        packageFileCount: manifestFiles.length,
         vaultMissing: false,
         totalSize,
         representativeFile: representative,
@@ -421,7 +470,11 @@
           taskKind: taskKindFor(entry),
           packagePath: "",
           files: [],
+          supportFiles: [],
+          manifestFiles: [],
           fileCount: 0,
+          supportFileCount: 0,
+          packageFileCount: 0,
           vaultMissing: true,
           totalSize: 0,
           representativeFile: null,
@@ -509,11 +562,13 @@
 
   window.DriveModelIndex = {
     MODEL_EXTENSIONS,
+    SUPPORT_EXTENSIONS,
     countFolders,
     extensionOf,
     flattenModels: flattenPackages,
     flattenPackages,
     isModelFile,
+    isPackageSupportFile,
     loadSnapshot,
     matchRegistry,
     mountLinkedTree,

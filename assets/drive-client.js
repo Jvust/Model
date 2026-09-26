@@ -269,8 +269,10 @@
     const queue = [rootNode];
     let scannedFolders = 0;
     let modelFiles = 0;
+    let supportFiles = 0;
     const maxFolders = Number(CONFIG.maxFolders || 2000);
     const maxModelFiles = Number(CONFIG.maxModelFiles || 20000);
+    const maxSupportFiles = Number(CONFIG.maxSupportFiles || 40000);
 
     while (queue.length) {
       const node = queue.shift();
@@ -314,6 +316,17 @@
               scanned: true,
               children: []
             });
+          } else if (window.DriveModelIndex.isPackageSupportFile(file)) {
+            supportFiles += 1;
+            if (supportFiles > maxSupportFiles) {
+              throw new Error("模型支持文件数量超过安全上限 " + maxSupportFiles + "。");
+            }
+            node.children.push({
+              file,
+              relativePath: childPath,
+              scanned: true,
+              children: []
+            });
           }
         }
 
@@ -325,6 +338,7 @@
         onProgress({
           scannedFolders,
           modelFiles,
+          supportFiles,
           currentFolder: node.file.name
         });
       }
@@ -334,7 +348,8 @@
       rootFolder: rootFile,
       tree: rootNode,
       scannedFolders,
-      modelFiles
+      modelFiles,
+      supportFiles
     };
   }
 

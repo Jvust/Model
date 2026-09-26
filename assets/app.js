@@ -1231,6 +1231,19 @@
       plan.gguf_preflight && Array.isArray(plan.gguf_preflight.warnings)
         ? plan.gguf_preflight.warnings.join("；")
         : "",
+      plan.package_manifest && !plan.package_manifest.error
+        ? (
+            "模型包清单：" +
+            plan.package_manifest.model_file_count +
+            " 权重 + " +
+            plan.package_manifest.support_file_count +
+            " 支持文件 · " +
+            formatBytes(plan.package_manifest.total_bytes)
+          )
+        : "",
+      plan.package_manifest && plan.package_manifest.error
+        ? "模型包清单错误：" + plan.package_manifest.error
+        : "",
       plan.availability_label ? "模型状态：" + plan.availability_label : "",
       plan.adapter ? "适配器：" + plan.adapter : "",
       plan.availability_reason ? "说明：" + plan.availability_reason : "",
@@ -1266,6 +1279,14 @@
           files: (Array.isArray(model.files) ? model.files : []).map(file => ({
             drive_file_id: file.id,
             file_name: file.name,
+            size: Number(file.size || 0) || null,
+            md5_checksum: file.md5Checksum || "",
+            resource_key: file.resourceKey || ""
+          })),
+          manifest_files: (Array.isArray(model.manifestFiles) ? model.manifestFiles : []).map(file => ({
+            drive_file_id: file.id,
+            file_name: file.name,
+            relative_path: file.relativePath,
             size: Number(file.size || 0) || null,
             md5_checksum: file.md5Checksum || "",
             resource_key: file.resourceKey || ""
@@ -1401,7 +1422,10 @@
         formatBytes(model.totalSize) +
         " · " +
         model.fileCount +
-        " 文件";
+        " 权重" +
+        (Number(model.supportFileCount || 0)
+          ? " + " + model.supportFileCount + " 支持文件"
+          : "");
 
       head.append(titleWrap, size);
 
@@ -1435,6 +1459,9 @@
         videoAdapter ? "网页视频适配已支持" : "",
         imageAdapter ? "网页图像适配已支持" : "",
         model.taskKind ? "llama.cpp 专用任务适配已支持" : "",
+        Number(model.supportFileCount || 0)
+          ? "完整包清单 " + model.packageFileCount + " 文件"
+          : "",
         managedAdapter
           ? hardware.known
             ? hardware.supported
@@ -1645,7 +1672,9 @@
               progress.scannedFolders +
               " 文件夹 · " +
               progress.modelFiles +
-              " 模型"
+              " 权重 · " +
+              Number(progress.supportFiles || 0) +
+              " 支持文件"
           );
         }
       );
@@ -1717,6 +1746,8 @@
           " 文件夹 · " +
           result.modelFiles +
           " 权重文件 · " +
+          Number(result.supportFiles || 0) +
+          " 支持文件 · " +
           models.length +
           " 模型包" +
           (linkedFolders ? " · " + linkedFolders + " 个链接目录" : "")

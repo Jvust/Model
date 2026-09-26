@@ -179,6 +179,10 @@
 - Drive 引导器已放入 `AI-Model-Vault/notebook_launchers/启动_Qwen3_Embedding_Reranker_0.6B_Q8_0_DriveFirst.ipynb`；两份约 639MB Q8_0 GGUF 都必须通过 exact size + SHA256 + GGUF header 后才可直接使用。
 - 状态边界：第四阶段 adapter/API/UI 已实现不等于权重已下载；在引导器实际跑完并重新扫描前，两张模型卡片继续显示准备引导器，不伪装为可执行。
 
+- 基础设施继续推进：Drive package manifest v3 已加入。扫描器除权重外保留 <=16MiB 的 JSON/TXT/YAML/YML 运行支持文件，并在模型包中区分 `files` / `supportFiles` / `manifestFiles`；旧 v2 session 索引自动失效。
+- Runtime v0.16 增加 `/v1/packages/status|materialize|stop`。它使用现有 DriveCache 断点缓存，按原相对路径恢复完整本地模型目录；大型权重优先硬链接，硬链接失败时拒绝偷偷复制几十 GB。
+- Wan2.2 T2V/I2V Drive 审计确认：high/low-noise 都是 6 片 Diffusers safetensors + index/config 的目录格式，因此不能直接接 ComfyUI `UNETLoader`。下一步改为 Drive package materializer → managed Diffusers video worker，避免当前 ComfyUI 模板从外网重复下载几十/上百 GB。
+
 ## 完成定义
 
 当用户在模型卡片上点击“使用模型”后，网页能自动完成检查、按需读取缓存、启动正确后端、提交任务并返回结果；如果模型当前不能运行，网页能在点击前准确说明缺少的权重、适配器或硬件条件。

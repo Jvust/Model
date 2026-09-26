@@ -7,6 +7,7 @@
     preferredFolderName: "AI-Model-Vault",
     maxFolders: 2000,
     maxModelFiles: 20000,
+    maxSupportFiles: 40000,
     rangeProbeBytes: 4096
   });
 })();

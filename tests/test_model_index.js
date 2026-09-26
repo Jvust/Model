@@ -56,6 +56,18 @@ const tree = folder("AI-Model-Vault", "", [
         "models_t5_umt5-xxl-enc-bf16.pth",
         "video_ultra/Wan2.2-Animate-14B/models_t5_umt5-xxl-enc-bf16.pth",
         300
+      ),
+      file(
+        "cfg",
+        "config.json",
+        "video_ultra/Wan2.2-Animate-14B/config.json",
+        565
+      ),
+      file(
+        "index",
+        "diffusion_pytorch_model.safetensors.index.json",
+        "video_ultra/Wan2.2-Animate-14B/diffusion_pytorch_model.safetensors.index.json",
+        130839
       )
     ])
   ]),
@@ -115,7 +127,16 @@ assert.strictEqual(packages.length, 3);
 const wan = packages.find(item => item.id === "wan22_animate_14b");
 assert.ok(wan);
 assert.strictEqual(wan.fileCount, 3);
+assert.strictEqual(wan.supportFileCount, 2);
+assert.strictEqual(wan.packageFileCount, 5);
 assert.strictEqual(wan.totalSize, 600);
+assert.strictEqual(wan.supportFiles[0].name, "config.json");
+assert.ok(
+  wan.supportFiles.some(
+    item => item.name === "diffusion_pytorch_model.safetensors.index.json"
+  )
+);
+assert.strictEqual(wan.manifestFiles.length, 5);
 assert.strictEqual(wan.backend, "ComfyUI");
 assert.strictEqual(wan.workspace, "video-generation");
 assert.strictEqual(wan.directLaunch, false);
@@ -288,5 +309,31 @@ assert.strictEqual(reranker.backend, "llama.cpp");
 assert.strictEqual(reranker.workspace, "embedding");
 assert.strictEqual(reranker.taskKind, "reranker");
 assert.strictEqual(reranker.directLaunch, false);
+
+
+assert.strictEqual(
+  window.DriveModelIndex.isPackageSupportFile({
+    name: "tokenizer_config.json",
+    mimeType: "application/json",
+    size: "2048"
+  }),
+  true
+);
+assert.strictEqual(
+  window.DriveModelIndex.isPackageSupportFile({
+    name: "README.md",
+    mimeType: "text/markdown",
+    size: "2048"
+  }),
+  false
+);
+assert.strictEqual(
+  window.DriveModelIndex.isPackageSupportFile({
+    name: "huge-config.json",
+    mimeType: "application/json",
+    size: String(17 * 1024 * 1024)
+  }),
+  false
+);
 
 console.log("model-index package tests passed");

@@ -22,6 +22,7 @@ try:
     from .drive_cache import DriveCache, DriveFileSpec
     from .hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from .model_capabilities import all_capabilities
+    from .package_runtime import PackageRuntime, manifest_summary
     from .task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from .image_runtime import (
         ImageRuntime,
@@ -40,6 +41,7 @@ except ImportError:
     from drive_cache import DriveCache, DriveFileSpec
     from hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from model_capabilities import all_capabilities
+    from package_runtime import PackageRuntime, manifest_summary
     from task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from image_runtime import (
         ImageRuntime,
@@ -613,7 +615,9 @@ STATE = RuntimeState()
 VIDEO = VideoRuntime()
 IMAGE = ImageRuntime(VIDEO, DRIVE_CACHE, DRIVE_SESSION.get)
 TASK = TaskRuntime(DRIVE_CACHE, DRIVE_SESSION.get, resolve_llama_server)
+PACKAGE = PackageRuntime(DRIVE_CACHE, DRIVE_SESSION.get)
 atexit.register(STATE.stop)
+atexit.register(PACKAGE.stop)
 atexit.register(TASK.stop)
 atexit.register(IMAGE.shutdown)
 atexit.register(VIDEO.shutdown)
@@ -621,7 +625,7 @@ atexit.register(VIDEO.shutdown)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DriveModelBridge/0.15"
+    server_version = "DriveModelBridge/0.16"
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -742,7 +746,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "Drive Model Local Runtime",
-                    "version": 15,
+                    "version": 16,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 },
             )
@@ -787,12 +791,20 @@ class Handler(BaseHTTPRequestHandler):
                     "video": VIDEO.snapshot(),
                     "image": IMAGE.snapshot(),
                     "task": TASK.snapshot(),
+                    "package": PACKAGE.snapshot(),
                     "hardware": runtime_hardware_snapshot(),
-                    "runtime_version": 15,
+                    "runtime_version": 16,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 }
             )
             self._json(200, payload)
+            return
+
+        if path == "/v1/packages/status":
+            if not self._origin_allowed():
+                self._json(403, {"error": "Origin not allowed."})
+                return
+            self._json(200, PACKAGE.snapshot())
             return
 
         if path == "/v1/tasks/status":
@@ -875,6 +887,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
 
+            if path == "/v1/packages/materialize":
+                result = PACKAGE.start(payload)
+                self._json(202, {"ok": True, "package": result})
+                return
+
+            if path == "/v1/packages/stop":
+                self._json(200, {"ok": True, "package": PACKAGE.stop()})
+                return
+
             if path == "/v1/tasks/start":
                 result = TASK.start(payload)
                 self._json(202, {"ok": True, "task": result})
@@ -923,6 +944,12 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(payload.get("name") or "")
                 model_id = str(payload.get("model_id") or "")
                 package_path = str(payload.get("package_path") or "")
+                package_manifest = None
+                if payload.get("manifest_files") and package_path:
+                    try:
+                        package_manifest = manifest_summary(payload)
+                    except (ValueError, FileNotFoundError) as error:
+                        package_manifest = {"error": str(error)}
                 video_match = video_adapter_for(name, model_id)
                 image_match = image_adapter_for(name, model_id, package_path)
                 weight_detail = (
@@ -1008,6 +1035,7 @@ class Handler(BaseHTTPRequestHandler):
                             hardware["detail"] if managed_adapter else None
                         ),
                         "gguf_preflight": gguf_status,
+                        "package_manifest": package_manifest,
                         "video_adapter": (
                             {
                                 "id": video_match[0],
@@ -1152,7 +1180,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Drive Model Local Runtime v0.15")
+    print("Drive Model Local Runtime v0.16")
     print(f"Bridge: http://{HOST}:{BRIDGE_PORT}")
     print("Drive source: Google Drive API (no desktop mount required)")
     print("Cache root:", DRIVE_CACHE.root)
@@ -1171,6 +1199,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        PACKAGE.stop()
         TASK.stop()
         IMAGE.shutdown()
         VIDEO.shutdown()
