@@ -617,7 +617,7 @@ atexit.register(VIDEO.shutdown)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DriveModelBridge/0.13"
+    server_version = "DriveModelBridge/0.14"
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -738,7 +738,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "Drive Model Local Runtime",
-                    "version": 13,
+                    "version": 14,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 },
             )
@@ -783,7 +783,7 @@ class Handler(BaseHTTPRequestHandler):
                     "video": VIDEO.snapshot(),
                     "image": IMAGE.snapshot(),
                     "hardware": runtime_hardware_snapshot(),
-                    "runtime_version": 13,
+                    "runtime_version": 14,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 }
             )
@@ -1123,7 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Drive Model Local Runtime v0.13")
+    print("Drive Model Local Runtime v0.14")
     print(f"Bridge: http://{HOST}:{BRIDGE_PORT}")
     print("Drive source: Google Drive API (no desktop mount required)")
     print("Cache root:", DRIVE_CACHE.root)
