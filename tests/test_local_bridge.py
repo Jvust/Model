@@ -1,6 +1,7 @@
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import runtime.local_bridge as bridge
@@ -54,6 +55,124 @@ class RemoteTokenTests(unittest.TestCase):
                 None,
             )
         )
+
+
+class MediaTicketTests(unittest.TestCase):
+    def test_media_ticket_round_trip(self):
+        secret = "remote-secret"
+        expires = 2800
+        ticket = bridge.media_ticket_signature(
+            secret,
+            "video",
+            "job-123",
+            expires,
+        )
+        self.assertTrue(
+            bridge.media_ticket_valid(
+                secret,
+                "video",
+                "job-123",
+                expires,
+                ticket,
+                now=1000,
+            )
+        )
+
+    def test_media_ticket_is_bound_to_kind_and_job(self):
+        secret = "remote-secret"
+        expires = 2800
+        ticket = bridge.media_ticket_signature(
+            secret,
+            "image",
+            "job-123",
+            expires,
+        )
+        self.assertFalse(
+            bridge.media_ticket_valid(
+                secret,
+                "video",
+                "job-123",
+                expires,
+                ticket,
+                now=1000,
+            )
+        )
+        self.assertFalse(
+            bridge.media_ticket_valid(
+                secret,
+                "image",
+                "job-other",
+                expires,
+                ticket,
+                now=1000,
+            )
+        )
+
+    def test_media_ticket_rejects_expired_and_excessive_expiry(self):
+        secret = "remote-secret"
+        expired = 999
+        expired_ticket = bridge.media_ticket_signature(
+            secret,
+            "image",
+            "job-123",
+            expired,
+        )
+        self.assertFalse(
+            bridge.media_ticket_valid(
+                secret,
+                "image",
+                "job-123",
+                expired,
+                expired_ticket,
+                now=1000,
+            )
+        )
+
+        far_future = 1000 + bridge.MEDIA_TICKET_TTL_SECONDS + 120
+        future_ticket = bridge.media_ticket_signature(
+            secret,
+            "image",
+            "job-123",
+            far_future,
+        )
+        self.assertFalse(
+            bridge.media_ticket_valid(
+                secret,
+                "image",
+                "job-123",
+                far_future,
+                future_ticket,
+                now=1000,
+            )
+        )
+
+    def test_media_status_signs_only_remote_ready_output(self):
+        snapshot = {
+            "job_id": "job-123",
+            "output_ready": True,
+            "phase": "complete",
+        }
+        with mock.patch.object(bridge, "REMOTE_TOKEN", "remote-secret"):
+            signed = bridge.media_status("image", snapshot, now=1000)
+        self.assertEqual(
+            signed["media_expires"],
+            1000 + bridge.MEDIA_TICKET_TTL_SECONDS,
+        )
+        self.assertTrue(
+            bridge.media_ticket_valid(
+                "remote-secret",
+                "image",
+                "job-123",
+                signed["media_expires"],
+                signed["media_ticket"],
+                now=1000,
+            )
+        )
+
+        with mock.patch.object(bridge, "REMOTE_TOKEN", ""):
+            local = bridge.media_status("image", snapshot, now=1000)
+        self.assertNotIn("media_ticket", local)
+        self.assertNotIn("media_expires", local)
 
 
 class GgufInspectionTests(unittest.TestCase):
