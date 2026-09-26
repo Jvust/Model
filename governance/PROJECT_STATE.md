@@ -59,6 +59,9 @@ Implemented on this branch:
 - Default-chat bootstrap notebook is stored in Drive under `AI-Model-Vault/notebook_launchers`; it targets official Qwen3-0.6B Q8_0, verifies SHA256/GGUF header, and writes into the canonical `llm` category.
 - The website offers the bootstrap action only when no real chat GGUF is scanned; this does not mark the model ready before the weight actually exists.
 - Unregistered GGUF packages under explicit chat-like Vault roots can route to llama.cpp, while mixed image GGUF packages remain protected by category/runtime routing.
+- Dedicated llama.cpp task server added on localhost port 8091 for Qwen3 Embedding/Reranker GGUFs; chat remains on 8080 and is not replaced.
+- Embedding/Reranker task APIs and real web workspace are implemented; Drive bootstrap remains required before the two task weights become runnable.
+- Task routing overrides the older Transformers registry label only for the two fixed Qwen task model IDs when a GGUF is actually scanned under the RAG vault.
 - The current managed ComfyUI package remains NVIDIA Windows/CUDA based; AMD-only machines are reported as hardware unsupported.
 - FLUX.2 Klein 4B FP8 now has a fixed distilled 4-step ComfyUI adapter. Its existing 4.07GB BFL FP8 single-file is valid; direct use stays blocked until `qwen_3_4b.safetensors` and `flux2-vae.safetensors` are present in the same Drive package.
 - A Drive-first FLUX.2 companion bootstrap notebook is stored under `AI-Model-Vault/notebook_launchers`; it validates official sizes/SHA256 and writes `MODEL_READY.json` only after all three files pass.
@@ -108,7 +111,7 @@ Implemented on this branch:
 
 | Backend | Detection | Automatic launch |
 | --- | --- | --- |
-| llama.cpp | yes | yes, via Drive API cache |
+| llama.cpp | yes | chat via Drive API cache + dedicated embedding/reranker task server on 8091 |
 | ComfyUI | managed/runtime detection + hardware gate | Pony Diffusion V6 XL + Qwen-Image 2.1 GGUF + FLUX.2 Klein 4B FP8 image, Wan2.2 TI2V 5B + HunyuanVideo 1.5 T2V on supported NVIDIA Windows hardware; FLUX.2 direct use also requires its two companion files |
 | Remote NVIDIA transport | Tailscale Serve + Runtime token | implemented; real two-device validation pending |
 | Diffusers | yes | not yet |
@@ -122,7 +125,7 @@ Implemented on this branch:
 1. Validate Pony Diffusion V6 XL and Qwen-Image 2.1 GGUF end-to-end on a supported NVIDIA Windows Runtime and record VRAM/RAM/disk observations.
 2. Run/validate the prepared FLUX.2 companion bootstrap, confirm encoder + VAE appear beside the existing FP8 main file, rescan, then validate one real 1024×1024 / 4-step image on a supported NVIDIA Runtime.
 3. Run/validate the prepared Qwen3-0.6B Q8_0 Drive bootstrap, confirm the verified GGUF appears under `llm/Qwen3-0.6B-GGUF`, then validate the full Drive cache → llama.cpp → web-chat round trip.
-4. Add GOT-OCR, Qwen Embedding, Qwen Reranker and Chronos/TimesFM weights to their new Vault categories, then enable their task adapters/workspaces; Drive audit currently finds no reusable weight copies.
+4. Run/validate the prepared Qwen3 Embedding/Reranker bootstrap and exercise real `/v1/embeddings` + `/v1/rerank`; then continue Stage 4 with GOT-OCR and Chronos/TimesFM.
 5. Validate the implemented Tailscale Serve remote NVIDIA path on two real devices (AMD/no-NVIDIA client + separate NVIDIA Windows host), including Drive session sync, progress polling and returned image/video media.
 6. Extend video adapters to Wan2.2 T2V/I2V/Animate and additional verified model families.
 7. Keep cache management/cancellation coverage and evaluate sparse-cache/virtual filesystem access only after full-file paths are stable.
