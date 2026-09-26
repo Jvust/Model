@@ -36,6 +36,12 @@
     modelName: "FLUX.2 Klein 4B FP8"
   };
 
+  const TASK_BOOTSTRAP = {
+    folderName: "notebook_launchers",
+    fileName: "启动_Qwen3_Embedding_Reranker_0.6B_Q8_0_DriveFirst.ipynb",
+    modelName: "Qwen3 Embedding / Reranker 0.6B Q8_0"
+  };
+
   const $ = id => document.getElementById(id);
 
   function setStatus(text) {
@@ -467,6 +473,55 @@
     }
   }
 
+  async function openTaskBootstrap(button) {
+    showError("");
+    button.disabled = true;
+    try {
+      await ensureAccessToken();
+
+      let rootId = $("folderId").value.trim();
+      if (!rootId) {
+        const root = await findPreferredFolder({ quiet: false });
+        if (!root) {
+          throw new Error("未找到 AI-Model-Vault，无法定位专用任务模型引导器。");
+        }
+        rootId = root.id;
+      }
+
+      const launcherFolder = await window.DriveModelClient.findFolderByName(
+        accessToken,
+        TASK_BOOTSTRAP.folderName,
+        rootId
+      );
+      if (!launcherFolder.folder) {
+        throw new Error("AI-Model-Vault 中没有 notebook_launchers 文件夹。");
+      }
+
+      const notebook = await window.DriveModelClient.findFileByName(
+        accessToken,
+        TASK_BOOTSTRAP.fileName,
+        launcherFolder.folder.id
+      );
+      if (!notebook) {
+        throw new Error("未找到专用任务模型引导器：" + TASK_BOOTSTRAP.fileName);
+      }
+
+      const url =
+        "https://colab.research.google.com/drive/" +
+        encodeURIComponent(notebook.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setStatus(
+        "已打开 " + TASK_BOOTSTRAP.modelName +
+        " 引导器；完成后回到这里重新扫描。"
+      );
+    } catch (error) {
+      showError(error);
+      setStatus("无法打开专用任务模型引导器");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function renderChat() {
     const target = $("chatMessages");
     target.textContent = "";
@@ -803,6 +858,31 @@
       ready: true,
       detail: artifacts.length + " 个固定模型文件已确认"
     };
+  }
+
+  function taskArtifactState(model) {
+    const kind = String(model && model.taskKind || "");
+    if (!kind) return { ready: false, detail: "没有专用任务适配器" };
+
+    const expected = kind === "embedding"
+      ? { name: "Qwen3-Embedding-0.6B-Q8_0.gguf", bytes: 639150592 }
+      : { name: "qwen3-reranker-0.6b-q8_0.gguf", bytes: 639153184 };
+
+    const files = Array.isArray(model && model.files) ? model.files : [];
+    const match = files.find(
+      file => String(file && file.name || "").toLowerCase() === expected.name.toLowerCase()
+    );
+    if (!match) {
+      return { ready: false, detail: "Drive 缺少固定 GGUF：" + expected.name };
+    }
+    const size = Number(match.size || 0);
+    if (size !== expected.bytes) {
+      return {
+        ready: false,
+        detail: "Drive GGUF 大小不匹配：" + expected.name
+      };
+    }
+    return { ready: true, detail: "固定 task GGUF 已确认" };
   }
 
   function managedComfyHardware(adapter = null) {
@@ -1333,6 +1413,7 @@
       const imageArtifact = imageAdapter
         ? imageArtifactState(model, imageAdapter)
         : null;
+      const taskArtifact = model.taskKind ? taskArtifactState(model) : null;
       const managedAdapter = videoAdapter || imageAdapter;
       const hardware = managedComfyHardware(managedAdapter);
       const capability = capabilityInfo(model);
@@ -1342,6 +1423,8 @@
         model.qualityTier || "",
         model.vaultMissing
           ? "主库未发现文件"
+          : model.taskKind && taskArtifact && !taskArtifact.ready
+            ? "Drive 文件不完整"
           : imageAdapter && imageArtifact && !imageArtifact.ready
             ? "Drive 文件不完整"
             : managedAdapter && hardware.known && !hardware.supported
@@ -1351,6 +1434,7 @@
                 : "",
         videoAdapter ? "网页视频适配已支持" : "",
         imageAdapter ? "网页图像适配已支持" : "",
+        model.taskKind ? "llama.cpp 专用任务适配已支持" : "",
         managedAdapter
           ? hardware.known
             ? hardware.supported
@@ -1368,11 +1452,13 @@
       path.textContent = model.vaultMissing
         ? "登记表中存在；所选 AI-Model-Vault 内未发现模型文件。"
         : (model.packagePath || model.relativePath) +
-          (imageAdapter && imageArtifact && !imageArtifact.ready
-            ? " · " + imageArtifact.detail
-            : capability && capability.label !== "可直接使用"
-              ? " · " + capability.reason
-              : "");
+          (model.taskKind && taskArtifact && !taskArtifact.ready
+            ? " · " + taskArtifact.detail
+            : imageAdapter && imageArtifact && !imageArtifact.ready
+              ? " · " + imageArtifact.detail
+              : capability && capability.label !== "可直接使用"
+                ? " · " + capability.reason
+                : "");
 
       const actions = document.createElement("div");
       actions.className = "model-actions";
@@ -1478,6 +1564,42 @@
         repair.className = "primary";
         repair.addEventListener("click", () => openFlux2Bootstrap(repair));
         actions.appendChild(repair);
+      } else if (
+        model.taskKind &&
+        taskArtifact &&
+        taskArtifact.ready &&
+        info &&
+        info.detected &&
+        (!capability || capability.label === "可直接使用")
+      ) {
+        const useTask = document.createElement("button");
+        useTask.type = "button";
+        useTask.dataset.icon = "play";
+        useTask.textContent =
+          model.taskKind === "embedding" ? "使用 Embedding" : "使用 Reranker";
+        useTask.className = "primary";
+        useTask.addEventListener("click", () => {
+          if (
+            window.ModelWorkspaces &&
+            typeof window.ModelWorkspaces.openModel === "function"
+          ) {
+            window.ModelWorkspaces.openModel(model);
+          } else {
+            showError("向量工作区尚未加载，请刷新网页后重试。");
+          }
+        });
+        actions.appendChild(useTask);
+      } else if (
+        model.taskKind &&
+        (model.vaultMissing || (taskArtifact && !taskArtifact.ready))
+      ) {
+        const prepareTask = document.createElement("button");
+        prepareTask.type = "button";
+        prepareTask.dataset.icon = "play";
+        prepareTask.textContent = "准备 Embedding / Reranker";
+        prepareTask.className = "primary";
+        prepareTask.addEventListener("click", () => openTaskBootstrap(prepareTask));
+        actions.appendChild(prepareTask);
       } else if (!model.vaultMissing && (!capability || !["Drive 文件不完整", "依赖模型不完整"].includes(capability.label))) {
         const prepare = document.createElement("button");
         prepare.type = "button";

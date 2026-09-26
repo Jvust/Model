@@ -16,6 +16,11 @@
     ".tflite"
   ]);
 
+  const LLAMA_TASK_MODEL_IDS = new Set([
+    "qwen3_embedding_0_6b",
+    "qwen3_reranker_0_6b"
+  ]);
+
   const CATEGORY_ROOTS = new Set([
     "image_base",
     "image_edit",
@@ -240,6 +245,15 @@
       String(entry && entry.category || "") ||
       inferredCategory;
 
+    // Dedicated task GGUFs intentionally override older registry runtime labels.
+    if (
+      extensions.has(".gguf") &&
+      entry &&
+      LLAMA_TASK_MODEL_IDS.has(String(entry.id || ""))
+    ) {
+      return "llama.cpp";
+    }
+
     // Registry routing wins over a file extension for mixed model packages.
     // Unregistered GGUFs are only direct chat candidates when their path lives
     // under an explicit chat-like category root.
@@ -281,6 +295,13 @@
       rag: "embedding",
       timeseries: "timeseries"
     }[category] || "generic";
+  }
+
+  function taskKindFor(entry) {
+    const id = String(entry && entry.id || "");
+    if (id === "qwen3_embedding_0_6b") return "embedding";
+    if (id === "qwen3_reranker_0_6b") return "reranker";
+    return null;
   }
 
   function flattenPackages(rootNode, registry = null) {
@@ -358,6 +379,7 @@
         vaultStatus: entry && entry.vault_status ? entry.vault_status : "",
         backend,
         workspace: workspaceForCategory(category),
+        taskKind: taskKindFor(entry),
         packagePath: group.packagePath,
         files,
         fileCount: files.length,
@@ -365,7 +387,9 @@
         totalSize,
         representativeFile: representative,
         directLaunch:
-          backend === "llama.cpp" && extensionOf(representative.name) === ".gguf",
+          backend === "llama.cpp" &&
+          extensionOf(representative.name) === ".gguf" &&
+          ["llm", "reasoning", "code", "novel"].includes(category),
         relativePath: representative.relativePath,
         runnableFormat:
           backend === "llama.cpp" && extensionOf(representative.name) === ".gguf"
@@ -394,6 +418,7 @@
           vaultStatus: entry.vault_status || "",
           backend: chooseBackend(entry, []),
           workspace: workspaceForCategory(category),
+          taskKind: taskKindFor(entry),
           packagePath: "",
           files: [],
           fileCount: 0,

@@ -25,6 +25,14 @@ class ModelCapabilityTests(unittest.TestCase):
         self.assertEqual(capability["availability"], "automatic")
         self.assertEqual(capability["adapter"], "ComfyUI")
 
+    def test_embedding_and_reranker_use_task_server(self):
+        embedding = capability_for("qwen3_embedding_0_6b")
+        reranker = capability_for("qwen3_reranker_0_6b")
+        self.assertEqual(embedding["availability"], "automatic")
+        self.assertIn("task server", embedding["adapter"])
+        self.assertEqual(reranker["availability"], "automatic")
+        self.assertIn("task server", reranker["adapter"])
+
     def test_incomplete_drive_model_is_not_runnable(self):
         capability = capability_for("flux_1_dev")
         self.assertEqual(capability["availability"], "incomplete")

@@ -225,4 +225,68 @@ assert.strictEqual(qwen06.workspace, "chat");
 assert.strictEqual(qwen06.directLaunch, true);
 assert.ok(qwen06.relativePath.endsWith(".gguf"));
 
+
+const taskRoot = folder("AI-Model-Vault", "", [
+  folder("rag", "rag", [
+    folder(
+      "Qwen__Qwen3-Embedding-0.6B-GGUF",
+      "rag/Qwen__Qwen3-Embedding-0.6B-GGUF",
+      [
+        file(
+          "emb",
+          "Qwen3-Embedding-0.6B-Q8_0.gguf",
+          "rag/Qwen__Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf",
+          639150592
+        )
+      ]
+    ),
+    folder(
+      "ggml-org__Qwen3-Reranker-0.6B-Q8_0-GGUF",
+      "rag/ggml-org__Qwen3-Reranker-0.6B-Q8_0-GGUF",
+      [
+        file(
+          "rerank",
+          "qwen3-reranker-0.6b-q8_0.gguf",
+          "rag/ggml-org__Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
+          639153184
+        )
+      ]
+    )
+  ])
+]);
+const taskRegistry = {
+  schema_version: "1.0.0",
+  models: [
+    {
+      id: "qwen3_embedding_0_6b",
+      name: "Qwen3-Embedding-0.6B",
+      repo: "Qwen/Qwen3-Embedding-0.6B",
+      category: "rag",
+      recommended_runtime: ["Transformers"],
+      device_fit: {}
+    },
+    {
+      id: "qwen3_reranker_0_6b",
+      name: "Qwen3-Reranker-0.6B",
+      repo: "Qwen/Qwen3-Reranker-0.6B",
+      category: "rag",
+      recommended_runtime: ["Transformers"],
+      device_fit: {}
+    }
+  ]
+};
+const taskPackages = window.DriveModelIndex.flattenPackages(taskRoot, taskRegistry);
+const embedding = taskPackages.find(item => item.id === "qwen3_embedding_0_6b");
+const reranker = taskPackages.find(item => item.id === "qwen3_reranker_0_6b");
+assert.ok(embedding);
+assert.ok(reranker);
+assert.strictEqual(embedding.backend, "llama.cpp");
+assert.strictEqual(embedding.workspace, "embedding");
+assert.strictEqual(embedding.taskKind, "embedding");
+assert.strictEqual(embedding.directLaunch, false);
+assert.strictEqual(reranker.backend, "llama.cpp");
+assert.strictEqual(reranker.workspace, "embedding");
+assert.strictEqual(reranker.taskKind, "reranker");
+assert.strictEqual(reranker.directLaunch, false);
+
 console.log("model-index package tests passed");
