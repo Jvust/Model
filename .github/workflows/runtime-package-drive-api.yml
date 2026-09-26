@@ -53,8 +53,8 @@ jobs:
             }
             if (-not $ok) { throw "Runtime health timed out" }
             if ([int]$health.version -ne 17) { throw "Old executable packaged" }
-            $home = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing -TimeoutSec 5
-            if ($home.Content -notmatch "native-workspaces.js" -or $home.Content -notmatch "chat-profiles.js") { throw "Embedded website is incomplete" }
+            $homepageResponse = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing -TimeoutSec 5
+            if ($homepageResponse.Content -notmatch "native-workspaces.js" -or $homepageResponse.Content -notmatch "chat-profiles.js") { throw "Embedded website is incomplete" }
             $video = Invoke-RestMethod "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 5
             if (-not $video.workflow_resources_ready -or -not $video.archive_support) { throw "Video resources missing" }
             if (($video.supported_adapters | Measure-Object).Count -lt 2) { throw "Video adapters missing" }
