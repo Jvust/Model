@@ -96,6 +96,24 @@
     return fetch(runtimeUrl(path), request);
   }
 
+  function runtimeMediaUrl(kind, state) {
+    const jobId = String(state && state.job_id || "").trim();
+    if (!jobId) throw new Error("媒体任务缺少 job_id。");
+    if (!["image", "video"].includes(kind)) {
+      throw new Error("未知媒体类型：" + kind);
+    }
+
+    const params = new URLSearchParams({
+      job_id: jobId,
+      t: String(Date.now())
+    });
+    if (state && state.media_ticket && state.media_expires) {
+      params.set("ticket", String(state.media_ticket));
+      params.set("expires", String(state.media_expires));
+    }
+    return runtimeUrl("/v1/" + kind + "/file?" + params.toString());
+  }
+
   async function syncRuntimeDriveSession() {
     if (!accessToken) {
       await ensureAccessToken();
@@ -954,11 +972,7 @@
 
       if (state.phase === "complete" && state.job_id) {
         const video = $("videoResult");
-        video.src =
-          runtimeUrl("/v1/video/file?job_id=") +
-          encodeURIComponent(state.job_id) +
-          "&t=" +
-          Date.now();
+        video.src = runtimeMediaUrl("video", state);
         video.hidden = false;
         $("videoEmpty").hidden = true;
         video.load();
@@ -1680,6 +1694,7 @@
     runtimeBase: () => runtimeBase || window.MODEL_CONFIG.runtimeBase,
     runtimeFetch,
     runtimeHeaders,
+    mediaUrl: runtimeMediaUrl,
     syncRuntimeDriveSession: async () => {
       saveRuntimeBase();
       await ensureAccessToken();
