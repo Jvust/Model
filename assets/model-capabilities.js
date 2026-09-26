@@ -11,7 +11,7 @@
     sd35_large: ["Drive 文件不完整", "Drive 缺少 Stable Diffusion 3.5 Large 主权重。"],
     flux_nsfw_uncensored: ["依赖模型不完整", "依赖的 FLUX.1-dev 尚未完整。"],
     pony_diffusion_v6_xl: ["可直接使用", "已接入网页 Pony SDXL 图像工作流；启动前仍会检查本机 NVIDIA/ComfyUI 硬件条件。"],
-    flux2_klein_4b_fp8: ["需要适配器", "单文件权重完整，但尚未接入图像工作流。"],
+    flux2_klein_4b_fp8: ["可直接使用", "已接入官方 FLUX.2 Klein 4B distilled 4-step 工作流；需要 Drive 同时存在 FP8 diffusion、qwen_3_4b text encoder 与 flux2-vae 三个固定文件。"],
     wan22_ti2v_5b: ["可直接使用", "已接入网页视频工作区。"],
     wan22_t2v_a14b: ["需要工作流", "权重完整，但需要独立 T2V 工作流。"],
     wan22_i2v_a14b: ["需要工作流", "权重完整，但需要独立 I2V 工作流。"],
