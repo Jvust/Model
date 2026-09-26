@@ -30,6 +30,12 @@
     approxSize: "约 639 MB"
   };
 
+  const FLUX2_BOOTSTRAP = {
+    folderName: "notebook_launchers",
+    fileName: "启动_FLUX2-klein-4b-fp8_补齐依赖_DriveFirst.ipynb",
+    modelName: "FLUX.2 Klein 4B FP8"
+  };
+
   const $ = id => document.getElementById(id);
 
   function setStatus(text) {
@@ -412,6 +418,55 @@
     }
   }
 
+  async function openFlux2Bootstrap(button) {
+    showError("");
+    button.disabled = true;
+    try {
+      await ensureAccessToken();
+
+      let rootId = $("folderId").value.trim();
+      if (!rootId) {
+        const root = await findPreferredFolder({ quiet: false });
+        if (!root) {
+          throw new Error("未找到 AI-Model-Vault，无法定位 FLUX.2 依赖引导器。");
+        }
+        rootId = root.id;
+      }
+
+      const launcherFolder = await window.DriveModelClient.findFolderByName(
+        accessToken,
+        FLUX2_BOOTSTRAP.folderName,
+        rootId
+      );
+      if (!launcherFolder.folder) {
+        throw new Error("AI-Model-Vault 中没有 notebook_launchers 文件夹。");
+      }
+
+      const notebook = await window.DriveModelClient.findFileByName(
+        accessToken,
+        FLUX2_BOOTSTRAP.fileName,
+        launcherFolder.folder.id
+      );
+      if (!notebook) {
+        throw new Error("未找到 FLUX.2 依赖引导器：" + FLUX2_BOOTSTRAP.fileName);
+      }
+
+      const url =
+        "https://colab.research.google.com/drive/" +
+        encodeURIComponent(notebook.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setStatus(
+        "已打开 " + FLUX2_BOOTSTRAP.modelName +
+        " 依赖引导器；完成后回到这里重新扫描。"
+      );
+    } catch (error) {
+      showError(error);
+      setStatus("无法打开 FLUX.2 依赖引导器");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function renderChat() {
     const target = $("chatMessages");
     target.textContent = "";
@@ -663,6 +718,36 @@
         ],
         minVramMb: 14 * 1024,
         minDiskFreeGb: 18
+      };
+    }
+
+    if (
+      hay.includes("flux2_klein_4b_fp8") ||
+      hay.includes("flux.2-klein-4b-fp8") ||
+      hay.includes("flux2-klein-4b-fp8") ||
+      hay.includes("flux2 klein 4b fp8")
+    ) {
+      return {
+        id: "flux2_klein_4b_fp8",
+        artifacts: [
+          {
+            role: "unet",
+            name: "flux-2-klein-4b-fp8.safetensors",
+            minBytes: 4000000000
+          },
+          {
+            role: "clip",
+            name: "qwen_3_4b.safetensors",
+            minBytes: 8000000000
+          },
+          {
+            role: "vae",
+            name: "flux2-vae.safetensors",
+            minBytes: 330000000
+          }
+        ],
+        minVramMb: 10 * 1024,
+        minDiskFreeGb: 15
       };
     }
 
@@ -1374,6 +1459,20 @@
           }
         });
         actions.appendChild(useImage);
+      } else if (
+        imageAdapter &&
+        imageAdapter.id === "flux2_klein_4b_fp8" &&
+        imageArtifact &&
+        !imageArtifact.ready &&
+        !model.vaultMissing
+      ) {
+        const repair = document.createElement("button");
+        repair.type = "button";
+        repair.dataset.icon = "play";
+        repair.textContent = "补齐 FLUX.2 依赖";
+        repair.className = "primary";
+        repair.addEventListener("click", () => openFlux2Bootstrap(repair));
+        actions.appendChild(repair);
       } else if (!model.vaultMissing && (!capability || !["Drive 文件不完整", "依赖模型不完整"].includes(capability.label))) {
         const prepare = document.createElement("button");
         prepare.type = "button";
