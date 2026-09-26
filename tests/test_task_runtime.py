@@ -12,6 +12,7 @@ from runtime.task_runtime import (
     TASK_ADAPTERS,
     TaskRuntime,
     adapter_for,
+    build_task_command,
     inspect_gguf,
     task_file_spec,
 )
@@ -35,6 +36,27 @@ class TaskAdapterTests(unittest.TestCase):
         )
         self.assertIsNotNone(matched)
         self.assertEqual(matched[0], "qwen3_reranker_0_6b")
+
+    def test_embedding_and_reranker_flags_stay_separate(self):
+        embedding = build_task_command(
+            "llama-server",
+            Path("embedding.gguf"),
+            TASK_ADAPTERS["qwen3_embedding_0_6b"],
+        )
+        reranker = build_task_command(
+            "llama-server",
+            Path("reranker.gguf"),
+            TASK_ADAPTERS["qwen3_reranker_0_6b"],
+        )
+        self.assertIn("--embedding", embedding)
+        self.assertIn("last", embedding)
+        self.assertNotIn("--rerank", embedding)
+        self.assertNotIn("--reranking", embedding)
+        self.assertIn("--embedding", reranker)
+        self.assertTrue("--rerank" in reranker or "--reranking" in reranker)
+        self.assertIn("rank", reranker)
+        self.assertIn("--ubatch-size", embedding)
+        self.assertIn("4096", embedding)
 
     def test_embedding_requires_exact_file(self):
         spec = task_file_spec(
