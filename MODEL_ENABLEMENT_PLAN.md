@@ -174,6 +174,11 @@
 - FLUX.2 companion 引导器已放入 `AI-Model-Vault/notebook_launchers/启动_FLUX2-klein-4b-fp8_补齐依赖_DriveFirst.ipynb`；只补齐 Qwen3-4B text encoder + FLUX2 VAE，不重复下载现有 4.07GB 主权重，并对三文件做官方 SHA256 校验。
 - 网页在 FLUX.2 主权重存在但 companion 缺失时显示“补齐 FLUX.2 依赖”；三文件齐全且硬件通过后才显示“使用图像模型”。
 
+- 第四阶段继续推进：Qwen3 Embedding 0.6B 与 Qwen3 Reranker 0.6B 改用独立 llama.cpp task server，不再依赖 Windows Runtime 内置 PyTorch/Transformers；聊天端口 8080 与 task 端口 8091 相互独立。
+- Qwen3 Embedding / Reranker task server 已接入 `/v1/tasks/start|status|stop`、`/v1/tasks/embeddings`、`/v1/tasks/rerank` 和真实网页向量工作区；Embedding 使用 last pooling，Reranker 使用 rank pooling。
+- Drive 引导器已放入 `AI-Model-Vault/notebook_launchers/启动_Qwen3_Embedding_Reranker_0.6B_Q8_0_DriveFirst.ipynb`；两份约 639MB Q8_0 GGUF 都必须通过 exact size + SHA256 + GGUF header 后才可直接使用。
+- 状态边界：第四阶段 adapter/API/UI 已实现不等于权重已下载；在引导器实际跑完并重新扫描前，两张模型卡片继续显示准备引导器，不伪装为可执行。
+
 ## 完成定义
 
 当用户在模型卡片上点击“使用模型”后，网页能自动完成检查、按需读取缓存、启动正确后端、提交任务并返回结果；如果模型当前不能运行，网页能在点击前准确说明缺少的权重、适配器或硬件条件。
