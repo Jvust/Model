@@ -115,6 +115,16 @@ def ensure_environment(root, model_id, cancel, progress=lambda text: None):
                 if getattr(sys, "frozen", False):
                     raise RuntimeError("This packaged Runtime supports Windows; Linux source mode needs Python 3.11")
                 run_checked([sys.executable, "-m", "venv", str(destination)], cancel, log)
+        if os.name == "nt" and not (destination / "Lib/site-packages/pip/__main__.py").is_file():
+            site = destination / "Lib/site-packages"
+            site.mkdir(parents=True, exist_ok=True)
+            with urlopen("https://pypi.org/pypi/pip/25.1.1/json", timeout=30) as response:
+                metadata = json.load(response)
+            wheel = next(item for item in metadata["urls"] if item["filename"] == "pip-25.1.1-py3-none-any.whl")
+            archive = destination / "pip.whl"
+            download(wheel["url"], archive, cancel, wheel["digests"]["sha256"])
+            extract_safe(archive, site)
+            (destination / "python311._pth").write_text("python311.zip\n.\nLib/site-packages\nimport site\n", encoding="utf-8")
         progress("Installing pinned inference dependencies (reused on later runs)")
         index = "https://download.pytorch.org/whl/" + ("cu126" if gpu else "cpu")
         run_checked([str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", "torch==2.7.1", "torchvision==0.22.1", "--index-url", index], cancel, log)

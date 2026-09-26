@@ -4,93 +4,62 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>星模 · Drive AI Runtime</title>
-  <meta name="description" content="通过 Google Drive API 浏览模型，本机 CPU/GPU 负责推理，并直接在网页聊天。" />
+  <meta name="description" content="Drive-first 模型库，本机或私有远程 Runtime 执行真实模型任务。" />
   <meta name="theme-color" content="#0b0f1d" />
   <link rel="icon" href="./assets/star.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./assets/model.css?v=10" />
 </head>
 <body>
   <header class="site-header shell">
-    <div class="brand">
-      <img src="./assets/star.svg" alt="" />
-      <div>星模<small>GOOGLE DRIVE / LOCAL AI</small></div>
-    </div>
+    <div class="brand"><img src="./assets/star.svg" alt="" /><div>星模<small>GOOGLE DRIVE / LOCAL AI</small></div></div>
     <div id="status" role="status" aria-live="polite">准备中</div>
   </header>
-
   <main class="shell">
     <section class="hero">
       <div class="kicker">GOOGLE DRIVE API · MULTI BACKEND · LOCAL COMPUTE</div>
-      <h1>Drive 里是一套模型库，<br /><span>网站自动判断该用哪个后端。</span></h1>
-      <p>
-        Google Drive API 负责模型发现、元数据和模型文件读取；网站读取 AI-Model-Vault/model_metadata.json，
-        把分片权重归并成模型包。GGUF 可直接聊天；已适配的 Wan2.2 / HunyuanVideo 视频模型可直接进入网页视频工作区。
-      </p>
+      <h1>Drive 里是一套模型库，<br /><span>本机网页连接真正的运行后端。</span></h1>
+      <p>Google Drive 保存模型，Runtime 缓存完整文件并执行任务。聊天、向量、OCR、时序预测和已适配的图像/视频各用自己的工作区；缺权重或硬件不满足时不会伪装成已执行。</p>
       <div class="hero-actions">
         <button id="loginBtn" data-icon="cloud" class="primary" type="button">连接 Google Drive</button>
         <button id="findVaultBtn" type="button">寻找 AI-Model-Vault</button>
         <button id="scanBtn" data-icon="chart" type="button">扫描模型</button>
       </div>
-      <p><a href="https://colab.research.google.com/github/Jvust/Model/blob/feat/model-release-v017-20260927/notebooks/Prepare_Models.ipynb" target="_blank" rel="noopener noreferrer">准备 OCR / 时序权重（CPU Notebook）</a> · <a href="./docs/RELEASE_ACCEPTANCE.md">0.17 候选版验收清单</a></p>
+      <p><a href="https://colab.research.google.com/github/Jvust/Model/blob/feat/model-release-v017-20260927/notebooks/Prepare_Models.ipynb" target="_blank" rel="noopener noreferrer">统一准备六个 CPU 模型</a> · <a href="./docs/使用与验收.md">安装、OAuth 部署与验收说明</a></p>
     </section>
-
     <div id="error" role="alert"></div>
-
     <section class="control-grid">
       <div class="panel">
         <h2>Google Drive 模型库</h2>
-        <div class="field">
-          <label for="folderName">自动寻找的文件夹名称</label>
-          <input id="folderName" value="AI-Model-Vault" autocomplete="off" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label for="folderId">当前模型根文件夹 ID（找不到时可手动填写）</label>
-          <input id="folderId" value="" placeholder="连接 Drive 后自动寻找" autocomplete="off" spellcheck="false" />
-        </div>
+        <div class="field"><label for="folderName">自动寻找的文件夹名称</label><input id="folderName" value="AI-Model-Vault" autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label for="folderId">当前模型根文件夹 ID</label><input id="folderId" value="" placeholder="连接 Drive 后自动寻找，也可手动填写" autocomplete="off" spellcheck="false" /></div>
         <div id="driveState" class="note">尚未连接 Google Drive。</div>
       </div>
-
       <div class="panel runtime-panel">
-        <h2>本机 AI 引擎</h2>
+        <h2>AI Runtime</h2>
         <div class="runtime-row">
           <span id="runtimeState">正在自动连接…</span>
           <button id="installRuntimeBtn" class="primary" type="button">首次安装</button>
           <button id="runtimeCheckBtn" type="button">重新连接</button>
           <button id="stopBtn" type="button" disabled>停止模型</button>
         </div>
-        <div id="runtimeHint" class="note">
-          网页会自动连接本机引擎；安装一次后，以后只需要打开这个网页。
-        </div>
+        <div id="runtimeHint" class="note">安装一次后，通过托盘或本机网页打开。</div>
         <details class="runtime-advanced">
-          <summary>高级诊断</summary>
-          <div class="field">
-            <label for="runtimeUrl">Runtime Bridge（本机或远程 HTTPS）</label>
-            <input id="runtimeUrl" value="http://127.0.0.1:8765" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="field">
-            <label for="runtimeToken">远程 Runtime 令牌（仅当前浏览器会话保存）</label>
-            <input id="runtimeToken" type="password" value="" placeholder="本机留空；远程 NVIDIA Runtime 填启用脚本输出的令牌" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="note">
-            远程模式只接受 HTTPS 地址；推荐使用 Tailscale Serve。令牌只写入 sessionStorage，关闭浏览器会话后失效。
-          </div>
+          <summary>高级诊断 / 远程 NVIDIA</summary>
+          <div class="field"><label for="runtimeUrl">Runtime Bridge（本机或私有 HTTPS）</label><input id="runtimeUrl" value="http://127.0.0.1:8765" autocomplete="off" spellcheck="false" /></div>
+          <div class="field"><label for="runtimeToken">远程 Runtime 令牌（仅当前浏览器会话）</label><input id="runtimeToken" type="password" value="" placeholder="本机留空；远程填写该主机令牌" autocomplete="off" spellcheck="false" /></div>
+          <div class="note">远程只接受 HTTPS；使用 Tailscale Serve。令牌不写入模型文件。</div>
           <pre id="runtimeLog" class="runtime-log">等待 Runtime 状态…</pre>
         </details>
       </div>
     </section>
-
     <section class="chat-panel" aria-labelledby="chatTitle">
       <div class="chat-head">
-        <div>
-          <div class="kicker">LOCAL CHAT</div>
-          <h2 id="chatTitle">本机工作区 · Chat</h2>
-          <p id="chatModelLabel">选择可用模型后直接使用；首次安装本机 AI 引擎后，之后只需打开网页。</p>
-        </div>
+        <div><div class="kicker">LOCAL CHAT</div><h2 id="chatTitle">聊天工作区</h2><p id="chatModelLabel">从模型库启动聊天 GGUF，等待加载完成。</p></div>
         <button id="clearChatBtn" type="button">清空对话</button>
       </div>
       <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
       <form id="chatForm" class="chat-form">
-        <textarea id="chatInput" rows="3" maxlength="16000" placeholder="模型就绪后，在这里输入消息…" disabled></textarea>
+        <textarea id="chatInput" rows="3" maxlength="16000" placeholder="模型就绪后输入消息…" disabled></textarea>
         <div class="chat-controls">
           <label>温度 <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.7" /></label>
           <label>最大输出 <input id="maxTokens" type="number" min="1" max="4096" step="1" value="512" /></label>
@@ -98,58 +67,37 @@
         </div>
       </form>
     </section>
-
     <section id="videoWorkspace" class="video-panel" hidden aria-labelledby="videoTitle">
       <div class="video-head">
-        <div>
-          <div class="kicker">LOCAL VIDEO</div>
-          <h2 id="videoTitle">本机工作区 · Video</h2>
-          <p id="videoModelLabel">从模型库选择已适配的视频模型。</p>
-        </div>
+        <div><div class="kicker">VIDEO</div><h2 id="videoTitle">视频工作区</h2><p id="videoModelLabel">从模型库选择已适配的视频模型。</p></div>
         <button id="videoCloseBtn" type="button">关闭工作区</button>
       </div>
-
       <div class="video-body">
         <div class="video-form">
-          <div class="field">
-            <label for="videoPrompt">视频提示词</label>
-            <textarea id="videoPrompt" rows="5" maxlength="12000" placeholder="描述画面、主体、动作、镜头运动、光线和风格…"></textarea>
-          </div>
-          <div class="field">
-            <label for="videoNegative">负面提示词（可选）</label>
-            <textarea id="videoNegative" rows="2" maxlength="6000" placeholder="不希望出现的内容…"></textarea>
-          </div>
+          <div class="field"><label for="videoPrompt">视频提示词</label><textarea id="videoPrompt" rows="5" maxlength="12000" placeholder="描述画面、动作、镜头和光线…"></textarea></div>
+          <div class="field"><label for="videoNegative">负面提示词</label><textarea id="videoNegative" rows="2" maxlength="6000"></textarea></div>
           <div class="video-settings">
             <label>宽度 <input id="videoWidth" type="number" min="256" max="1920" step="16" value="832" /></label>
             <label>高度 <input id="videoHeight" type="number" min="256" max="1080" step="16" value="480" /></label>
             <label>帧数 <input id="videoFrames" type="number" min="9" max="241" step="4" value="49" /></label>
-            <label>FPS <input id="videoFps" type="number" min="1" max="60" step="1" value="24" /></label>
-            <label>Steps <input id="videoSteps" type="number" min="1" max="100" step="1" value="20" /></label>
+            <label>FPS <input id="videoFps" type="number" min="1" max="60" value="24" /></label>
+            <label>Steps <input id="videoSteps" type="number" min="1" max="100" value="20" /></label>
             <label>CFG <input id="videoCfg" type="number" min="0" max="20" step="0.5" value="5" /></label>
             <label>Seed <input id="videoSeed" type="number" step="1" placeholder="随机" /></label>
           </div>
-          <div class="video-actions">
-            <button id="videoGenerateBtn" class="primary" data-icon="play" type="button">生成视频</button>
-            <button id="videoStopBtn" type="button" disabled>停止任务</button>
-          </div>
+          <div class="video-actions"><button id="videoGenerateBtn" class="primary" data-icon="play" type="button">生成视频</button><button id="videoStopBtn" type="button" disabled>停止任务</button></div>
           <div id="videoStatus" class="video-status">等待选择视频模型。</div>
           <div class="video-progress-track" aria-hidden="true"><div id="videoProgressBar" class="video-progress-bar"></div></div>
-          <div id="videoFirstRunNote" class="note">首次生成会自动准备 ComfyUI Windows Portable 和该工作流需要的后端模型文件，下载量可能很大；完成后会复用本机缓存。</div>
+          <div id="videoFirstRunNote" class="note">首次运行准备 ComfyUI 和对应后端文件，下载量可能很大。必须使用满足要求的 NVIDIA 主机；后续复用缓存。</div>
         </div>
-        <div class="video-preview">
-          <div id="videoEmpty" class="video-empty">生成完成后，视频会直接显示在这里。</div>
-          <video id="videoResult" controls playsinline preload="metadata" hidden></video>
-        </div>
+        <div class="video-preview"><div id="videoEmpty" class="video-empty">生成完成后在这里显示视频。</div><video id="videoResult" controls playsinline preload="metadata" hidden></video></div>
       </div>
     </section>
     <section>
-      <div class="library-head">
-        <div><h2>模型库</h2><p>每个卡片代表一个模型包，而不是单个权重分片；“运行方案”会检查对应后端与本机环境。</p></div>
-        <div id="modelCount">0 个模型包</div>
-      </div>
+      <div class="library-head"><div><h2>模型库</h2><p>每个卡片代表模型包；缺权重、缺适配器、硬件不支持分别处理。</p></div><div id="modelCount">0 个模型包</div></div>
       <div id="modelList" class="model-list"></div>
     </section>
-    <div class="note footer-note">当前链路：Google Drive API → 模型包/能力注册表 → localhost Runtime → 本机缓存 → 对应后端 → 本机 CPU/GPU。</div>
+    <div class="note footer-note">Google Drive API → 持久缓存 → 对应后端。真实模型验收结果与代码能力分开记录。</div>
   </main>
   <script src="./assets/config.js?v=11"></script>
   <script src="./assets/model-index.js?v=15"></script>
@@ -159,5 +107,6 @@
   <script src="./assets/workspaces.js?v=7"></script>
   <script src="./assets/cache-ui.js?v=2"></script>
   <script src="./assets/native-workspaces.js?v=1"></script>
+  <script src="./assets/chat-profiles.js?v=1"></script>
 </body>
 </html>

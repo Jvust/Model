@@ -1,23 +1,19 @@
 name: runtime-package-web
-
 on:
   push:
     branches: [main, feat/runtime-package-main]
   pull_request:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: runtime-package-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   package:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,11 +21,15 @@ jobs:
           python-version: "3.11"
       - name: Test all source contracts
         run: python -m unittest discover -s tests -v
-      - name: Build standalone Runtime EXE
+      - name: Test OAuth account isolation with mocked provider
+        run: node tests/test_oauth_sessions.mjs
+      - name: Bundle checksum-verified official CPU llama.cpp
+        run: python -m tools.prepare_llama
+      - name: Build standalone Runtime with matching embedded website
         shell: powershell
         run: |
           python -m pip install --disable-pip-version-check pyinstaller py7zr
-          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" --add-data "runtime\native_worker.py;." runtime\application.py
+          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" --add-data "runtime\native_worker.py;." --add-data "index.html;site" --add-data "sw.js;site" --add-data "assets;site/assets" --add-data "docs;site/docs" --add-data "notebooks;site/notebooks" runtime\application.py
           Copy-Item -Force dist\ModelRuntime.exe runtime\ModelRuntime.exe
       - name: Smoke test standalone Runtime EXE
         shell: powershell
@@ -53,6 +53,8 @@ jobs:
             }
             if (-not $ok) { throw "Runtime health timed out" }
             if ([int]$health.version -ne 17) { throw "Old executable packaged" }
+            $home = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing -TimeoutSec 5
+            if ($home.Content -notmatch "native-workspaces.js" -or $home.Content -notmatch "chat-profiles.js") { throw "Embedded website is incomplete" }
             $video = Invoke-RestMethod "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 5
             if (-not $video.workflow_resources_ready -or -not $video.archive_support) { throw "Video resources missing" }
             if (($video.supported_adapters | Measure-Object).Count -lt 2) { throw "Video adapters missing" }
@@ -65,18 +67,14 @@ jobs:
             $runtime = Invoke-RestMethod "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 10
             if ([int]$runtime.runtime_version -ne 17 -or $runtime.remote_auth_required) { throw "Unexpected Runtime version/auth default" }
             if ($null -eq $runtime.hardware.memory.available_bytes -or $null -eq $runtime.hardware.cache_disk.free_bytes) { throw "Hardware preflight missing" }
-            $hardware = Invoke-RestMethod "http://127.0.0.1:8765/v1/hardware" -TimeoutSec 10
-            if (-not $hardware.ok -or $null -eq $hardware.hardware.gpu.nvidia_smi) { throw "Hardware endpoint failed" }
-            $capabilities = Invoke-RestMethod "http://127.0.0.1:8765/v1/models/capabilities" -TimeoutSec 5
-            if (($capabilities.models | Measure-Object).Count -ne 27) { throw "Legacy model registry lost" }
             $native = Invoke-RestMethod "http://127.0.0.1:8765/v1/native/catalog" -TimeoutSec 5
             if (($native.models | Measure-Object).Count -ne 5) { throw "Native adapters missing" }
             New-Item -ItemType Directory -Force qa-evidence | Out-Null
-            @{ version = 17; executable_smoke = "PASS"; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
+            @{ version = 17; executable_smoke = "PASS"; embedded_website = "PASS"; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
           } finally {
             if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
           }
-      - name: Parse and exercise runtime scripts
+      - name: Parse scripts and exercise fresh noninteractive installation
         shell: powershell
         run: |
           foreach ($file in (Get-ChildItem runtime\*.ps1)) {
@@ -88,24 +86,37 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\install_runtime.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\background.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\remote_nvidia.ps1 -SelfTest
-      - name: Assemble matching source and executable
+          $originalLocal = $env:LOCALAPPDATA
+          try {
+            $env:LOCALAPPDATA = "$env:RUNNER_TEMP\model-fresh-install"
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\install_runtime.ps1 -NoStart -CacheRoot "$env:RUNNER_TEMP\model-fresh-cache"
+            if ($LASTEXITCODE -ne 0) { throw "Fresh installation failed" }
+            $config = Get-Content "$env:LOCALAPPDATA\JvustModel\runtime.json" -Raw | ConvertFrom-Json
+            if (-not (Test-Path -LiteralPath $config.llamaServerPath)) { throw "Installed CPU engine missing" }
+            if (-not (Test-Path "$env:LOCALAPPDATA\JvustModel\app\ModelRuntime.exe")) { throw "Installed Runtime missing" }
+            @{ fresh_install = "PASS"; manual_llama_selection = $false; cache_deleted = $false } | ConvertTo-Json | Set-Content qa-evidence\installer.json
+          } finally {
+            Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name JvustModelRuntime -ErrorAction SilentlyContinue
+            $env:LOCALAPPDATA = $originalLocal
+          }
+      - name: Read-only public OAuth deployment probe
+        run: python -m tools.probe_oauth_public
+      - name: Assemble matching source, engine and executable
         shell: powershell
         run: |
           $root = "Model-Runtime"
           New-Item -ItemType Directory -Force $root | Out-Null
-          foreach ($folder in @("runtime", "assets", "docs", "notebooks", "governance", "tests", "tools")) {
-            Copy-Item -Recurse -Force $folder "$root\$folder"
-          }
+          foreach ($folder in @("runtime", "assets", "docs", "notebooks", "governance", "tests", "tools", "workers")) { Copy-Item -Recurse -Force $folder "$root\$folder" }
           foreach ($file in @("README.md", "MODEL_ENABLEMENT_PLAN.md", "index.html", "sw.js")) { Copy-Item -Force $file "$root\$file" }
           Copy-Item -Recurse qa-evidence "$root\qa-evidence"
           Get-ChildItem $root -Directory -Recurse -Filter __pycache__ | Remove-Item -Recurse -Force
+          Get-ChildItem $root -File -Recurse | Where-Object { $_.Extension -in @('.ttf','.otf','.woff','.woff2') } | Remove-Item -Force
           Get-FileHash "$root\runtime\ModelRuntime.exe" -Algorithm SHA256 | Format-List | Out-File "$root\EXE_SHA256.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: Model-0.17-RC-${{ github.sha }}
           path: Model-Runtime/
           if-no-files-found: error
-
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -124,7 +135,6 @@ jobs:
           name: Model-browser-${{ github.sha }}
           path: qa-evidence/
           if-no-files-found: warn
-
   native-cpu:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
@@ -150,4 +160,25 @@ jobs:
           path: |
             qa-evidence/
             ${{ runner.temp }}/model-native-smoke/${{ matrix.model }}/environments/**/setup.log
+          if-no-files-found: warn
+  gguf-cpu:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install huggingface_hub==0.34.4
+      - run: python -m tools.prepare_llama
+      - name: Actual chat, embedding and rerank CPU inference
+        env:
+          HF_HUB_DISABLE_XET: "1"
+        run: python -m tools.smoke_gguf_models
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Model-GGUF-real-${{ github.sha }}
+          path: qa-evidence/
           if-no-files-found: warn

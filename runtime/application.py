@@ -1,19 +1,27 @@
 """Release composition root: legacy engines plus isolated native-task execution."""
 from __future__ import annotations
 import json
+import mimetypes
+import sys
+from pathlib import Path
 import re
 from http.server import ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 try:
     from . import local_bridge as bridge
     from .native_runtime import NativeRuntime
     from .native_worker import CATALOG
+    from .chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 except ImportError:
     import local_bridge as bridge
     from native_runtime import NativeRuntime
     from native_worker import CATALOG
+    from chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 
 VERSION = 17
+bridge.STATE = ProfiledRuntimeState()
+bridge.ALLOWED_ORIGINS.update({f"http://127.0.0.1:{bridge.BRIDGE_PORT}", f"http://localhost:{bridge.BRIDGE_PORT}"})
+SITE_ROOT = Path(sys._MEIPASS) / "site" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 NATIVE = NativeRuntime(bridge.DRIVE_CACHE, bridge.DRIVE_SESSION.get)
 
 
@@ -79,8 +87,27 @@ class ApplicationHandler(bridge.Handler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path in {"/", "/index.html", "/sw.js"} or path.startswith(("/assets/", "/docs/", "/notebooks/")):
+            relative = "index.html" if path == "/" else unquote(path).lstrip("/")
+            if "\x00" in relative or "\\" in relative or any(part in {".", ".."} for part in relative.split("/")):
+                self._json(404, {"error": "Invalid static path"})
+                return
+            file = (SITE_ROOT / relative).resolve()
+            if not file.is_relative_to(SITE_ROOT.resolve()) or not file.is_file():
+                self._json(404, {"error": "Static file not found"})
+                return
+            content = file.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if path == "/health":
-            self._json(200, {"ok": True, "version": VERSION, "service": "Drive Model Runtime", "remote_auth_required": bool(bridge.REMOTE_TOKEN)})
+            self._json(200, {"ok": True, "version": VERSION, "service": "Drive Model Local Runtime", "remote_auth_required": bool(bridge.REMOTE_TOKEN)})
             return
         if path.startswith("/v1/") and not self._gate():
             return
@@ -109,6 +136,17 @@ class ApplicationHandler(bridge.Handler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/v1/chat/profile":
+            if not self._gate():
+                return
+            try:
+                data = self._read_json()
+                name, relative = data.get("name"), data.get("relative_path", "")
+                profile = save_profile(name, relative, data["profile"]) if "profile" in data else load_profile(name, relative)
+                self._json(200, {"profile": profile})
+            except (ValueError, TypeError, KeyError) as error:
+                self._json(400, {"error": str(error)})
+            return
         if not path.startswith("/v1/native/"):
             super().do_POST()
             return
