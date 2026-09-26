@@ -20,9 +20,10 @@ class ModelCapabilityTests(unittest.TestCase):
         self.assertEqual(capability["availability"], "automatic")
         self.assertEqual(capability["adapter"], "ComfyUI")
 
-    def test_flux2_stays_adapter_required(self):
+    def test_flux2_has_fixed_runtime_adapter(self):
         capability = capability_for("flux2_klein_4b_fp8")
-        self.assertEqual(capability["availability"], "adapter_required")
+        self.assertEqual(capability["availability"], "automatic")
+        self.assertEqual(capability["adapter"], "ComfyUI")
 
     def test_incomplete_drive_model_is_not_runnable(self):
         capability = capability_for("flux_1_dev")
