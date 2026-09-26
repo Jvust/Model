@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from runtime.image_runtime import (
     ADAPTERS,
@@ -9,6 +10,7 @@ from runtime.image_runtime import (
     FLUX2_KLEIN_FP8,
     FLUX2_TEXT_ENCODER,
     FLUX2_VAE,
+    ImageRuntime,
     adapter_for,
     artifact_specs,
     build_prompt,
@@ -235,6 +237,55 @@ class ImageAdapterTests(unittest.TestCase):
                 },
                 ADAPTERS["pony_diffusion_v6_xl"],
             )
+
+    def test_required_node_value_validation_accepts_flux2(self):
+        runtime = object.__new__(ImageRuntime)
+        adapter = {
+            "label": "FLUX.2",
+            "required_nodes": ("CLIPLoader",),
+            "required_node_values": {
+                "CLIPLoader": {"type": "flux2"},
+            },
+        }
+        object_info = {
+            "CLIPLoader": {
+                "input": {
+                    "required": {
+                        "type": [["stable_diffusion", "qwen_image", "flux2"]]
+                    }
+                }
+            }
+        }
+        with mock.patch(
+            "runtime.image_runtime.json_request",
+            return_value=object_info,
+        ):
+            runtime._verify_required_nodes(adapter)
+
+    def test_required_node_value_validation_rejects_old_clip_loader(self):
+        runtime = object.__new__(ImageRuntime)
+        adapter = {
+            "label": "FLUX.2",
+            "required_nodes": ("CLIPLoader",),
+            "required_node_values": {
+                "CLIPLoader": {"type": "flux2"},
+            },
+        }
+        object_info = {
+            "CLIPLoader": {
+                "input": {
+                    "required": {
+                        "type": [["stable_diffusion", "qwen_image"]]
+                    }
+                }
+            }
+        }
+        with mock.patch(
+            "runtime.image_runtime.json_request",
+            return_value=object_info,
+        ):
+            with self.assertRaises(RuntimeError):
+                runtime._verify_required_nodes(adapter)
 
     def test_builds_sdxl_comfy_prompt(self):
         prompt = build_prompt(
