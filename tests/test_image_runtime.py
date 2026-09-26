@@ -3,6 +3,9 @@ import unittest
 from runtime.image_runtime import (
     ADAPTERS,
     PONY_CHECKPOINT,
+    FLUX2_KLEIN_UNET,
+    FLUX2_KLEIN_CLIP,
+    FLUX2_KLEIN_VAE,
     QWEN_TEXT_ENCODER,
     QWEN_UNET,
     QWEN_VAE,
@@ -107,7 +110,85 @@ class ImageAdapterTests(unittest.TestCase):
         self.assertEqual(prompt["6"]["inputs"]["scheduler"], "simple")
         self.assertEqual(prompt["8"]["class_type"], "SaveImage")
 
-    def test_rejects_unadapted_flux(self):
+    def test_matches_flux2_klein_fp8(self):
+        matched = adapter_for(
+            "FLUX.2 Klein 4B FP8",
+            "flux2_klein_4b_fp8",
+            "image_base/black-forest-labs__FLUX.2-klein-4b-fp8",
+        )
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched[0], "flux2_klein_4b_fp8")
+
+    def test_flux2_requires_all_three_drive_artifacts(self):
+        specs = artifact_specs(
+            {
+                "files": [
+                    {
+                        "id": "testFlux2Unet123456789",
+                        "name": FLUX2_KLEIN_UNET,
+                        "size": 4_070_624_520,
+                    },
+                    {
+                        "id": "testFlux2Clip123456789",
+                        "name": FLUX2_KLEIN_CLIP,
+                        "size": 8_040_000_000,
+                    },
+                    {
+                        "id": "testFlux2Vae1234567890",
+                        "name": FLUX2_KLEIN_VAE,
+                        "size": 336_000_000,
+                    },
+                ]
+            },
+            ADAPTERS["flux2_klein_4b_fp8"],
+        )
+        self.assertEqual(set(specs), {"unet", "clip", "vae"})
+
+    def test_flux2_rejects_missing_companions(self):
+        with self.assertRaises(FileNotFoundError):
+            artifact_specs(
+                {
+                    "files": [
+                        {
+                            "id": "testFlux2Unet123456789",
+                            "name": FLUX2_KLEIN_UNET,
+                            "size": 4_070_624_520,
+                        }
+                    ]
+                },
+                ADAPTERS["flux2_klein_4b_fp8"],
+            )
+
+    def test_builds_flux2_klein_distilled_prompt(self):
+        prompt = build_prompt(
+            {
+                "unet": FLUX2_KLEIN_UNET,
+                "clip": FLUX2_KLEIN_CLIP,
+                "vae": FLUX2_KLEIN_VAE,
+            },
+            {
+                "prompt": "a cat holding a hello sign",
+                "width": 1024,
+                "height": 1024,
+                "steps": 4,
+                "cfg": 1.0,
+                "seed": 123,
+            },
+            ADAPTERS["flux2_klein_4b_fp8"],
+            "fluxjob",
+        )
+        self.assertEqual(prompt["1"]["class_type"], "UNETLoader")
+        self.assertEqual(prompt["1"]["inputs"]["unet_name"], FLUX2_KLEIN_UNET)
+        self.assertEqual(prompt["2"]["inputs"]["type"], "flux2")
+        self.assertEqual(prompt["5"]["class_type"], "ConditioningZeroOut")
+        self.assertEqual(prompt["6"]["inputs"]["cfg"], 1.0)
+        self.assertEqual(prompt["8"]["inputs"]["sampler_name"], "euler")
+        self.assertEqual(prompt["9"]["class_type"], "Flux2Scheduler")
+        self.assertEqual(prompt["9"]["inputs"]["steps"], 4)
+        self.assertEqual(prompt["10"]["class_type"], "EmptyFlux2LatentImage")
+        self.assertEqual(prompt["13"]["class_type"], "SaveImage")
+
+
         self.assertIsNone(
             adapter_for("FLUX.2 Klein 4B FP8", "flux2_klein_4b_fp8")
         )
