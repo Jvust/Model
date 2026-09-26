@@ -733,17 +733,20 @@
           {
             role: "unet",
             name: "flux-2-klein-4b-fp8.safetensors",
-            minBytes: 4000000000
+            minBytes: 4000000000,
+            expectedBytes: 4070624520
           },
           {
             role: "clip",
             name: "qwen_3_4b.safetensors",
-            minBytes: 8000000000
+            minBytes: 8000000000,
+            expectedBytes: 8044982048
           },
           {
             role: "vae",
             name: "flux2-vae.safetensors",
-            minBytes: 330000000
+            minBytes: 330000000,
+            expectedBytes: 336213556
           }
         ],
         minVramMb: 10 * 1024,
@@ -774,8 +777,10 @@
         continue;
       }
       const size = Number(match.size || 0);
+      const exact = Number(artifact.expectedBytes || 0);
       if (
         !Number.isFinite(size) ||
+        (exact > 0 && size !== exact) ||
         size < Number(artifact.minBytes || 0)
       ) {
         invalid.push(artifact.name);

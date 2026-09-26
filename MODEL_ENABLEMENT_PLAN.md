@@ -170,6 +170,10 @@
 - 当前固定 ComfyUI v0.37.0 已确认包含 `Flux2Scheduler` 与 `EmptyFlux2LatentImage`；Runtime 仍会在任务前查询 `/object_info`，缺节点时拒绝执行。
 - 状态边界：adapter 已接通不等于 Drive 已 ready；在 companion notebook 实际跑完并重新扫描前，FLUX.2 仍保持“Drive 文件不完整/补齐依赖”状态。
 
+- 第二阶段继续推进：已加入 FLUX.2 Klein 4B FP8 固定三文件校验与官方 distilled 4-step ComfyUI graph；pinned ComfyUI v0.37.0 已确认包含 Flux2Scheduler / EmptyFlux2LatentImage 等所需节点。
+- FLUX.2 companion 引导器已放入 `AI-Model-Vault/notebook_launchers/启动_FLUX2-klein-4b-fp8_补齐依赖_DriveFirst.ipynb`；只补齐 Qwen3-4B text encoder + FLUX2 VAE，不重复下载现有 4.07GB 主权重，并对三文件做官方 SHA256 校验。
+- 网页在 FLUX.2 主权重存在但 companion 缺失时显示“补齐 FLUX.2 依赖”；三文件齐全且硬件通过后才显示“使用图像模型”。
+
 ## 完成定义
 
 当用户在模型卡片上点击“使用模型”后，网页能自动完成检查、按需读取缓存、启动正确后端、提交任务并返回结果；如果模型当前不能运行，网页能在点击前准确说明缺少的权重、适配器或硬件条件。
