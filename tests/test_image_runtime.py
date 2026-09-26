@@ -147,6 +147,31 @@ class ImageAdapterTests(unittest.TestCase):
         self.assertEqual(set(specs), {"unet", "clip", "vae"})
         self.assertEqual(specs["unet"].name, FLUX2_KLEIN_FP8)
 
+    def test_flux2_rejects_wrong_exact_size(self):
+        with self.assertRaises(ValueError):
+            artifact_specs(
+                {
+                    "files": [
+                        {
+                            "id": "testFlux2UnetWrongSize",
+                            "name": FLUX2_KLEIN_FP8,
+                            "size": 4_070_624_519,
+                        },
+                        {
+                            "id": "testFlux2Clip123456789",
+                            "name": FLUX2_TEXT_ENCODER,
+                            "size": 8_044_982_048,
+                        },
+                        {
+                            "id": "testFlux2Vae1234567890",
+                            "name": FLUX2_VAE,
+                            "size": 336_213_556,
+                        },
+                    ]
+                },
+                ADAPTERS["flux2_klein_4b_fp8"],
+            )
+
     def test_flux2_rejects_missing_companion(self):
         with self.assertRaises(FileNotFoundError):
             artifact_specs(
