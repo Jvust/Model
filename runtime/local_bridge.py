@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -91,6 +93,9 @@ MODEL_READY_WARN_SECONDS = positive_float_env("MODEL_READY_WARN_SECONDS", 300.0)
 MODEL_HEALTH_INTERVAL = positive_float_env("MODEL_HEALTH_INTERVAL", 0.5)
 MODEL_CHAT_TIMEOUT = positive_float_env("MODEL_CHAT_TIMEOUT", 600.0)
 REMOTE_TOKEN = os.environ.get("MODEL_REMOTE_TOKEN", "").strip()
+MEDIA_TICKET_TTL_SECONDS = int(
+    positive_float_env("MODEL_MEDIA_TICKET_TTL_SECONDS", 1800.0)
+)
 
 DEFAULT_ORIGINS = ",".join(
     [
@@ -125,6 +130,84 @@ def remote_token_valid(
     if not candidate:
         return False
     return secrets.compare_digest(candidate, expected)
+
+
+def media_ticket_signature(
+    secret: str,
+    kind: str,
+    job_id: str,
+    expires: int,
+) -> str:
+    key = str(secret or "").encode("utf-8")
+    message = f"{kind}:{job_id}:{int(expires)}".encode("utf-8")
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def media_ticket_valid(
+    secret: str,
+    kind: str,
+    job_id: str,
+    expires,
+    ticket: str | None,
+    *,
+    now: int | None = None,
+) -> bool:
+    expected_secret = str(secret or "").strip()
+    if not expected_secret:
+        return True
+
+    kind_value = str(kind or "").strip().lower()
+    job_value = str(job_id or "").strip()
+    ticket_value = str(ticket or "").strip().lower()
+    if kind_value not in {"image", "video"}:
+        return False
+    if not job_value or len(job_value) > 128 or not ticket_value:
+        return False
+
+    try:
+        expiry = int(expires)
+    except (TypeError, ValueError):
+        return False
+
+    current = int(time.time()) if now is None else int(now)
+    if expiry < current:
+        return False
+    if expiry > current + MEDIA_TICKET_TTL_SECONDS + 60:
+        return False
+
+    expected = media_ticket_signature(
+        expected_secret,
+        kind_value,
+        job_value,
+        expiry,
+    )
+    return secrets.compare_digest(ticket_value, expected)
+
+
+def media_status(
+    kind: str,
+    snapshot: dict,
+    *,
+    now: int | None = None,
+) -> dict:
+    result = dict(snapshot or {})
+    if (
+        not REMOTE_TOKEN
+        or not result.get("output_ready")
+        or not result.get("job_id")
+    ):
+        return result
+
+    current = int(time.time()) if now is None else int(now)
+    expires = current + MEDIA_TICKET_TTL_SECONDS
+    result["media_ticket"] = media_ticket_signature(
+        REMOTE_TOKEN,
+        kind,
+        str(result["job_id"]),
+        expires,
+    )
+    result["media_expires"] = expires
+    return result
 
 
 def resolve_llama_server() -> str | None:
@@ -617,7 +700,7 @@ atexit.register(VIDEO.shutdown)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DriveModelBridge/0.14"
+    server_version = "DriveModelBridge/0.15"
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -631,6 +714,22 @@ class Handler(BaseHTTPRequestHandler):
             REMOTE_TOKEN,
             self.headers.get("Authorization"),
             self.headers.get("X-Model-Runtime-Token"),
+        )
+
+    def _media_authorized(
+        self,
+        kind: str,
+        job_id: str,
+        query: dict,
+    ) -> bool:
+        if self._authorized():
+            return True
+        return media_ticket_valid(
+            REMOTE_TOKEN,
+            kind,
+            job_id,
+            str((query.get("expires") or [""])[0]),
+            str((query.get("ticket") or [""])[0]),
         )
 
     def _cors_headers(self) -> None:
@@ -738,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "Drive Model Local Runtime",
-                    "version": 14,
+                    "version": 15,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 },
             )
@@ -780,10 +879,10 @@ class Handler(BaseHTTPRequestHandler):
                     "bridge_port": BRIDGE_PORT,
                     "model_server_port": MODEL_SERVER_PORT,
                     "ready_warn_seconds": MODEL_READY_WARN_SECONDS,
-                    "video": VIDEO.snapshot(),
-                    "image": IMAGE.snapshot(),
+                    "video": media_status("video", VIDEO.snapshot()),
+                    "image": media_status("image", IMAGE.snapshot()),
                     "hardware": runtime_hardware_snapshot(),
-                    "runtime_version": 14,
+                    "runtime_version": 15,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 }
             )
@@ -808,7 +907,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._origin_allowed():
                 self._json(403, {"error": "Origin not allowed."})
                 return
-            self._json(200, IMAGE.snapshot())
+            self._json(200, media_status("image", IMAGE.snapshot()))
             return
 
         if path == "/v1/image/file":
@@ -817,6 +916,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             query = parse_qs(urlparse(self.path).query)
             job_id = str((query.get("job_id") or [""])[0])
+            if not self._media_authorized("image", job_id, query):
+                self._json(401, {"error": "Media authorization required."})
+                return
             try:
                 image_path = IMAGE.output_file(job_id)
                 self._serve_video_file(image_path)
@@ -830,7 +932,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._origin_allowed():
                 self._json(403, {"error": "Origin not allowed."})
                 return
-            self._json(200, VIDEO.snapshot())
+            self._json(200, media_status("video", VIDEO.snapshot()))
             return
 
         if path == "/v1/video/file":
@@ -839,6 +941,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             query = parse_qs(urlparse(self.path).query)
             job_id = str((query.get("job_id") or [""])[0])
+            if not self._media_authorized("video", job_id, query):
+                self._json(401, {"error": "Media authorization required."})
+                return
             try:
                 video_path = VIDEO.output_file(job_id)
                 self._serve_video_file(video_path)
@@ -1123,7 +1228,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Drive Model Local Runtime v0.14")
+    print("Drive Model Local Runtime v0.15")
     print(f"Bridge: http://{HOST}:{BRIDGE_PORT}")
     print("Drive source: Google Drive API (no desktop mount required)")
     print("Cache root:", DRIVE_CACHE.root)
