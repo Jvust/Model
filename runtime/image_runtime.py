@@ -92,6 +92,9 @@ ADAPTERS = {
             "VAEDecode",
             "SaveImage",
         ),
+        "required_node_values": {
+            "CLIPLoader": {"type": "qwen_image"},
+        },
         "artifacts": {
             "unet": {
                 "name": QWEN_UNET,
@@ -147,6 +150,9 @@ ADAPTERS = {
             "VAEDecode",
             "SaveImage",
         ),
+        "required_node_values": {
+            "CLIPLoader": {"type": "flux2"},
+        },
         "artifacts": {
             "unet": {
                 "name": FLUX2_KLEIN_FP8,
@@ -796,15 +802,47 @@ class ImageRuntime:
 
     def _verify_required_nodes(self, adapter: dict) -> None:
         required = tuple(adapter.get("required_nodes") or ())
-        if not required:
+        required_values = adapter.get("required_node_values") or {}
+        if not required and not required_values:
             return
         info = json_request(COMFY_BASE + "/object_info", timeout=60)
         missing = [name for name in required if name not in info]
+        label = str(adapter.get("label") or "图像模型")
         if missing:
-            label = str(adapter.get("label") or "图像模型")
             raise RuntimeError(
                 f"ComfyUI 缺少 {label} 所需节点："
                 + "、".join(missing)
+                + "。请更新 Runtime/ComfyUI 后重试。"
+            )
+
+        value_errors = []
+        for node_name, fields in required_values.items():
+            node = info.get(node_name) or {}
+            input_info = node.get("input") or {}
+            required_info = input_info.get("required") or {}
+            optional_info = input_info.get("optional") or {}
+            for field_name, expected in (fields or {}).items():
+                spec = required_info.get(field_name)
+                if spec is None:
+                    spec = optional_info.get(field_name)
+                choices = None
+                if isinstance(spec, (list, tuple)) and spec:
+                    candidate = spec[0]
+                    if isinstance(candidate, (list, tuple)):
+                        choices = list(candidate)
+                if choices is None:
+                    value_errors.append(
+                        f"{node_name}.{field_name} 无法读取可选值"
+                    )
+                elif expected not in choices:
+                    value_errors.append(
+                        f"{node_name}.{field_name} 不支持 {expected}"
+                    )
+
+        if value_errors:
+            raise RuntimeError(
+                f"ComfyUI 与 {label} 工作流不兼容："
+                + "；".join(value_errors)
                 + "。请更新 Runtime/ComfyUI 后重试。"
             )
 
