@@ -192,7 +192,7 @@
       starting: "正在准备图像任务",
       preparing_comfyui: "正在准备 ComfyUI",
       downloading_model: "正在从 Drive 准备模型缓存",
-      building_workflow: "正在构建 Pony SDXL 工作流",
+      building_workflow: "正在构建图像工作流",
       queued: "任务已提交",
       generating: "正在生成图像",
       complete: "图像生成完成",
