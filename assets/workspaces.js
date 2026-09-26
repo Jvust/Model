@@ -189,6 +189,7 @@
 
     if (state.phase === "ready") return state;
     if (state.phase === "failed") throw new Error(state.error || "专用任务模型启动失败。");
+    if (state.phase === "idle") throw new Error("专用任务模型已停止。");
 
     return await new Promise((resolve, reject) => {
       taskPollTimer = setTimeout(() => {
