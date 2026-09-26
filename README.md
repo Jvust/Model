@@ -153,6 +153,7 @@ Current direct image adapters:
 
 - Pony Diffusion V6 XL — 1024×1024 default, 28 steps, CFG 5, CLIP skip 2.
 - Qwen-Image 2.1 GGUF — 768×768 default, 20 steps, CFG 1.0; fixed files are `qwen-image-2.1-Q4_K_M.gguf`, `qwen3vl_8b_int8_convrot.safetensors`, and `qwen_image_2.1_vae_bf16.safetensors`.
+- FLUX.2 Klein 4B FP8 — 1024×1024 default, distilled 4 steps, CFG 1.0; fixed files are `flux-2-klein-4b-fp8.safetensors`, `qwen_3_4b.safetensors`, and `flux2-vae.safetensors`.
 
 Qwen-Image remains in its existing Drive root folder. The website links that folder into the model index at scan time instead of copying roughly 14 GB of weights into `AI-Model-Vault`. First Qwen use installs the small ComfyUI-GGUF custom node/dependencies into the managed ComfyUI runtime, then reuses them.
 
