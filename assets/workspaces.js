@@ -50,13 +50,13 @@
       icon: "⌘",
       title: "向量检索",
       eyebrow: "RAG · EMBEDDING / RERANK",
-      description: "把资料转成向量，建立可搜索的本地知识库。",
+      description: "用独立 llama.cpp task server 做文本向量化或候选文档重排。",
       fields: [
-        ["source", "资料目录或 Drive 文件夹 ID", "粘贴目录或文件夹 ID", "text"],
-        ["query", "检索问题", "输入要查找的问题…", "textarea"],
+        ["source", "文本 / 候选文档", "每行一条文本或候选文档…", "textarea"],
+        ["query", "查询文本", "Reranker 必填；Embedding 可留空", "textarea"],
         ["topk", "返回数量", "5", "text"]
       ],
-      backend: "Transformers"
+      backend: "llama.cpp"
     },
     {
       id: "timeseries",
@@ -125,6 +125,8 @@
   let backendState = null;
   let selectedImageModel = null;
   let imagePollTimer = null;
+  let selectedTaskModel = null;
+  let taskPollTimer = null;
 
   function runtimeBase() {
     if (window.ModelApp && typeof window.ModelApp.runtimeBase === "function") {
@@ -145,6 +147,188 @@
       return window.ModelApp.runtimeFetch(path, options);
     }
     return fetch(runtimeBase() + path, options);
+  }
+
+  function stopTaskPolling() {
+    if (taskPollTimer) {
+      clearTimeout(taskPollTimer);
+      taskPollTimer = null;
+    }
+  }
+
+  function taskPhaseText(state) {
+    const phase = String(state && state.phase || "idle");
+    const labels = {
+      idle: "等待任务模型",
+      downloading: "正在从 Drive 准备专用 GGUF",
+      loading: "正在启动 llama.cpp task server",
+      ready: "专用任务模型已就绪",
+      failed: "专用任务模型启动失败"
+    };
+    return (labels[phase] || phase) + (state && state.error ? "\n" + state.error : "");
+  }
+
+  async function taskStatus() {
+    const response = await runtimeFetch("/v1/tasks/status", { cache: "no-store" });
+    const state = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(state.error || "无法读取专用任务状态。");
+    return state;
+  }
+
+  async function waitTaskReady(status, run, stop) {
+    stopTaskPolling();
+    const state = await taskStatus();
+    let text = taskPhaseText(state);
+    if (state.current_file) text += "\n文件：" + state.current_file;
+    if (typeof state.download_progress === "number") {
+      text += "\n缓存进度：" + Math.floor(state.download_progress * 100) + "%";
+    }
+    status.textContent = text;
+    if (run) run.disabled = state.phase !== "ready";
+    if (stop) stop.disabled = !state.running;
+
+    if (state.phase === "ready") return state;
+    if (state.phase === "failed") throw new Error(state.error || "专用任务模型启动失败。");
+
+    return await new Promise((resolve, reject) => {
+      taskPollTimer = setTimeout(() => {
+        waitTaskReady(status, run, stop).then(resolve).catch(reject);
+      }, 1000);
+    });
+  }
+
+  async function ensureTaskModel(status, run, stop) {
+    if (!selectedTaskModel) {
+      throw new Error("请先从模型库选择 Embedding 或 Reranker 模型。");
+    }
+    const current = await taskStatus().catch(() => null);
+    if (
+      current &&
+      current.ready &&
+      current.adapter === selectedTaskModel.id
+    ) {
+      return current;
+    }
+
+    if (window.ModelApp && typeof window.ModelApp.syncRuntimeDriveSession === "function") {
+      await window.ModelApp.syncRuntimeDriveSession();
+    }
+
+    status.textContent = "正在启动 " + selectedTaskModel.name + "…";
+    if (run) run.disabled = true;
+    if (stop) stop.disabled = false;
+
+    const response = await runtimeFetch("/v1/tasks/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model_id: selectedTaskModel.id,
+        name: selectedTaskModel.name,
+        package_path: selectedTaskModel.packagePath || selectedTaskModel.relativePath || "",
+        files: modelFiles(selectedTaskModel)
+      })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "专用任务模型启动失败：" + response.status);
+    return await waitTaskReady(status, run, stop);
+  }
+
+  function formatEmbeddingResult(result) {
+    const data = result && Array.isArray(result.data) ? result.data : [];
+    if (!data.length) return JSON.stringify(result, null, 2).slice(0, 6000);
+    const first = data[0] && Array.isArray(data[0].embedding) ? data[0].embedding : [];
+    return [
+      "向量数量：" + data.length,
+      "向量维度：" + first.length,
+      first.length ? "首条向量预览：" + first.slice(0, 12).map(v => Number(v).toFixed(5)).join(", ") : ""
+    ].filter(Boolean).join("\n");
+  }
+
+  function formatRerankResult(result) {
+    const rows =
+      (result && Array.isArray(result.results) && result.results) ||
+      (result && Array.isArray(result.data) && result.data) ||
+      [];
+    if (!rows.length) return JSON.stringify(result, null, 2).slice(0, 6000);
+    return rows.slice(0, 20).map((row, index) => {
+      const score =
+        row.relevance_score ?? row.score ?? row.similarity ?? row.logit ?? "";
+      const docIndex = row.index ?? row.document_index ?? index;
+      return (index + 1) + ". 文档 " + docIndex + (score === "" ? "" : " · score=" + Number(score).toFixed(6));
+    }).join("\n");
+  }
+
+  async function runTaskModel(form, status) {
+    if (!selectedTaskModel) {
+      status.textContent = "请先从模型库选择 Embedding 或 Reranker 模型。";
+      return;
+    }
+    const values = new FormData(form);
+    const run = form.querySelector('button[type="submit"]');
+    const stop = form.querySelector("[data-stop-task]");
+    try {
+      await ensureTaskModel(status, run, stop);
+      const kind = String(selectedTaskModel.taskKind || "");
+      if (kind === "embedding") {
+        const texts = String(values.get("source") || "")
+          .split(/\r?\n/)
+          .map(value => value.trim())
+          .filter(Boolean);
+        if (!texts.length) throw new Error("请至少输入一条要向量化的文本。");
+        status.textContent = "正在生成向量…";
+        const response = await runtimeFetch("/v1/tasks/embeddings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input: texts })
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Embedding 执行失败。");
+        status.textContent = formatEmbeddingResult(body.result || {});
+      } else if (kind === "reranker") {
+        const query = String(values.get("query") || "").trim();
+        const documents = String(values.get("source") || "")
+          .split(/\r?\n/)
+          .map(value => value.trim())
+          .filter(Boolean);
+        if (!query) throw new Error("Reranker 需要查询文本。");
+        if (!documents.length) throw new Error("请至少输入一条候选文档。");
+        const topN = Math.max(1, Number(values.get("topk") || documents.length));
+        status.textContent = "正在重排候选文档…";
+        const response = await runtimeFetch("/v1/tasks/rerank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, documents, top_n: topN })
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Reranker 执行失败。");
+        status.textContent = formatRerankResult(body.result || {});
+      } else {
+        throw new Error("未知专用任务类型。");
+      }
+    } catch (error) {
+      status.textContent = "任务失败：\n" + String(error.message || error);
+    } finally {
+      if (run) run.disabled = false;
+    }
+  }
+
+  async function stopTaskModel(status, run, stop) {
+    stopTaskPolling();
+    try {
+      const response = await runtimeFetch("/v1/tasks/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "停止专用任务模型失败。");
+      status.textContent = "专用任务模型已停止。";
+    } catch (error) {
+      status.textContent = "停止失败：" + String(error.message || error);
+    } finally {
+      if (run) run.disabled = false;
+      if (stop) stop.disabled = true;
+    }
   }
 
   function imageDefaults(model) {
@@ -420,16 +604,23 @@
     actions.append(run, check);
     const stop = document.createElement("button");
     stop.type = "button";
-    stop.dataset.stopImage = "true";
     stop.textContent = "停止任务";
     stop.disabled = true;
-    if (item.id === "image-generation") actions.appendChild(stop);
+    if (item.id === "image-generation") {
+      stop.dataset.stopImage = "true";
+      actions.appendChild(stop);
+    } else if (item.id === "embedding-rag") {
+      stop.dataset.stopTask = "true";
+      actions.appendChild(stop);
+    }
     form.appendChild(actions);
     form.addEventListener("submit", event => {
       event.preventDefault();
       const status = root.querySelector(".workspace-status");
       if (item.id === "image-generation") {
         runImageTask(form, status);
+      } else if (item.id === "embedding-rag") {
+        runTaskModel(form, status);
       } else {
         status.textContent = item.title + " 的输入已准备好；该模型家族尚未完成真实 Runtime 适配，因此不会伪装成已执行。";
       }
@@ -440,6 +631,29 @@
         const status = root.querySelector(".workspace-status");
         stopImageTask(form, status);
       });
+    } else if (item.id === "embedding-rag") {
+      run.disabled = !selectedTaskModel;
+      run.textContent = selectedTaskModel && selectedTaskModel.taskKind === "reranker"
+        ? "启动并重排"
+        : "启动并生成向量";
+      stop.addEventListener("click", () => {
+        const status = root.querySelector(".workspace-status");
+        stopTaskModel(status, run, stop);
+      });
+      const source = form.querySelector('[name="source"]');
+      const query = form.querySelector('[name="query"]');
+      const topk = form.querySelector('[name="topk"]');
+      if (selectedTaskModel && selectedTaskModel.taskKind === "embedding") {
+        source.parentElement.querySelector("label").textContent = "文本（每行一条）";
+        source.placeholder = "第一条文本\n第二条文本";
+        query.parentElement.hidden = true;
+        topk.parentElement.hidden = true;
+      } else if (selectedTaskModel && selectedTaskModel.taskKind === "reranker") {
+        source.parentElement.querySelector("label").textContent = "候选文档（每行一条）";
+        source.placeholder = "候选文档 A\n候选文档 B\n候选文档 C";
+        query.parentElement.hidden = false;
+        topk.parentElement.hidden = false;
+      }
     }
     main.append(eyebrow, title, description, form);
 
@@ -451,7 +665,9 @@
     backend.className = "workspace-backend";
     backend.textContent = item.id === "image-generation" && selectedImageModel
       ? "当前模型 · " + selectedImageModel.name + " · " + item.backend
-      : "目标后端 · " + item.backend;
+      : item.id === "embedding-rag" && selectedTaskModel
+        ? "当前模型 · " + selectedTaskModel.name + " · llama.cpp task server"
+        : "目标后端 · " + item.backend;
     const status = document.createElement("div");
     status.className = "workspace-status";
     status.textContent = item.id === "image-generation"
@@ -465,12 +681,17 @@
               imageDefaults(selectedImageModel).cfg
             )
           : "请先从模型库选择一个已经接入适配器并通过硬件检查的图像模型。")
-      : "点击“检查本机后端”获取 Runtime 检测结果。";
+      : item.id === "embedding-rag"
+        ? (
+            selectedTaskModel
+              ? "已选择 " + selectedTaskModel.name + " · " + selectedTaskModel.taskKind
+              : "请先从模型库选择 Qwen3 Embedding 或 Reranker。"
+          )
+        : "点击“检查本机后端”获取 Runtime 检测结果。";
     check.addEventListener("click", async () => {
       status.textContent = "正在检查本机 Runtime…";
       try {
-        const base = runtimeBase();
-        const response = await fetch(base + "/v1/backends", { cache: "no-store" });
+        const response = await runtimeFetch("/v1/backends", { cache: "no-store" });
         if (!response.ok) throw new Error("HTTP " + response.status);
         backendState = await response.json();
         const info = backendState.backends && backendState.backends[item.backend];
@@ -488,9 +709,16 @@
 
   window.ModelWorkspaces = {
     openModel(model) {
-      if (!model || model.workspace !== "image-generation") return false;
-      selectedImageModel = model;
-      active = "image-generation";
+      if (!model) return false;
+      if (model.workspace === "image-generation") {
+        selectedImageModel = model;
+        active = "image-generation";
+      } else if (model.workspace === "embedding" && model.taskKind) {
+        selectedTaskModel = model;
+        active = "embedding-rag";
+      } else {
+        return false;
+      }
       renderTabs();
       renderContent();
       root.scrollIntoView({ behavior: "smooth", block: "start" });
