@@ -16,7 +16,7 @@ MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "sd35_large": {"availability": "incomplete", "adapter": "Diffusers", "reason": "Drive 缺少 Stable Diffusion 3.5 Large 主权重。"},
     "flux_nsfw_uncensored": {"availability": "dependency_blocked", "adapter": "ComfyUI/Diffusers", "reason": "依赖的 FLUX.1-dev 尚未完整。"},
     "pony_diffusion_v6_xl": {"availability": "automatic", "adapter": "ComfyUI", "reason": "已接入网页 Pony SDXL 图像工作流；启动前仍会检查本机 NVIDIA/ComfyUI 硬件条件。"},
-    "flux2_klein_4b_fp8": {"availability": "adapter_required", "adapter": "ComfyUI/Diffusers", "reason": "单文件权重完整，但尚未接入图像工作流。"},
+    "flux2_klein_4b_fp8": {"availability": "automatic", "adapter": "ComfyUI", "reason": "FLUX.2 Klein 4B distilled 工作流已接通；需要主 FP8 权重、Qwen3-4B text encoder 和 FLUX2 VAE 三个固定文件齐全。"},
     "wan22_ti2v_5b": {"availability": "automatic", "adapter": "ComfyUI", "reason": "已接入网页视频工作区。"},
     "wan22_t2v_a14b": {"availability": "workflow_required", "adapter": "ComfyUI", "reason": "权重完整，但需要独立 T2V 工作流。"},
     "wan22_i2v_a14b": {"availability": "workflow_required", "adapter": "ComfyUI", "reason": "权重完整，但需要独立 I2V 工作流。"},
