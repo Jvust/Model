@@ -33,6 +33,9 @@ PONY_MIN_BYTES = 6_000_000_000
 QWEN_UNET = "qwen-image-2.1-Q4_K_M.gguf"
 QWEN_TEXT_ENCODER = "qwen3vl_8b_int8_convrot.safetensors"
 QWEN_VAE = "qwen_image_2.1_vae_bf16.safetensors"
+FLUX2_KLEIN_FP8 = "flux-2-klein-4b-fp8.safetensors"
+FLUX2_TEXT_ENCODER = "qwen_3_4b.safetensors"
+FLUX2_VAE = "flux2-vae.safetensors"
 
 COMFY_GGUF_ARCHIVE_URL = (
     "https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip"
@@ -118,6 +121,59 @@ ADAPTERS = {
             "size_step": 32,
             "min_size": 256,
             "resolution": 1024,
+        },
+    },    "flux2_klein_4b_fp8": {
+        "label": "FLUX.2 Klein 4B FP8",
+        "match": (
+            "flux2_klein_4b_fp8",
+            "flux.2-klein-4b-fp8",
+            "flux2-klein-4b-fp8",
+            "flux2 klein 4b fp8",
+            "black-forest-labs__flux.2-klein-4b-fp8",
+        ),
+        "workflow_kind": "flux2_klein_4b",
+        "required_nodes": (
+            "UNETLoader",
+            "CLIPLoader",
+            "VAELoader",
+            "CLIPTextEncode",
+            "ConditioningZeroOut",
+            "RandomNoise",
+            "KSamplerSelect",
+            "Flux2Scheduler",
+            "CFGGuider",
+            "EmptyFlux2LatentImage",
+            "SamplerCustomAdvanced",
+            "VAEDecode",
+            "SaveImage",
+        ),
+        "artifacts": {
+            "unet": {
+                "name": FLUX2_KLEIN_FP8,
+                "min_bytes": 4_000_000_000,
+                "directories": ("diffusion_models",),
+            },
+            "clip": {
+                "name": FLUX2_TEXT_ENCODER,
+                "min_bytes": 8_000_000_000,
+                "directories": ("text_encoders",),
+            },
+            "vae": {
+                "name": FLUX2_VAE,
+                "min_bytes": 330_000_000,
+                "directories": ("vae",),
+            },
+        },
+        "min_vram_mb": 10 * 1024,
+        "min_disk_free_gb": 15.0,
+        "defaults": {
+            "width": 1024,
+            "height": 1024,
+            "steps": 4,
+            "cfg": 1.0,
+            "sampler_name": "euler",
+            "size_step": 32,
+            "min_size": 256,
         },
     },
 }
@@ -313,6 +369,95 @@ def build_prompt(model_files, payload: dict, adapter: dict, job_id: str) -> dict
                 "inputs": {
                     "images": ["7", 0],
                     "filename_prefix": f"image/qwen_{job_id}",
+                },
+            },
+        }
+
+    if workflow_kind == "flux2_klein_4b":
+        names = model_files if isinstance(model_files, dict) else {}
+        unet_name = str(names.get("unet") or FLUX2_KLEIN_FP8)
+        clip_name = str(names.get("clip") or FLUX2_TEXT_ENCODER)
+        vae_name = str(names.get("vae") or FLUX2_VAE)
+        return {
+            "1": {
+                "class_type": "UNETLoader",
+                "inputs": {
+                    "unet_name": unet_name,
+                    "weight_dtype": "default",
+                },
+            },
+            "2": {
+                "class_type": "CLIPLoader",
+                "inputs": {
+                    "clip_name": clip_name,
+                    "type": "flux2",
+                    "device": "default",
+                },
+            },
+            "3": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": vae_name},
+            },
+            "4": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["2", 0]},
+            },
+            "5": {
+                "class_type": "ConditioningZeroOut",
+                "inputs": {"conditioning": ["4", 0]},
+            },
+            "6": {
+                "class_type": "RandomNoise",
+                "inputs": {"noise_seed": seed},
+            },
+            "7": {
+                "class_type": "KSamplerSelect",
+                "inputs": {"sampler_name": defaults["sampler_name"]},
+            },
+            "8": {
+                "class_type": "Flux2Scheduler",
+                "inputs": {
+                    "steps": steps,
+                    "width": width,
+                    "height": height,
+                },
+            },
+            "9": {
+                "class_type": "CFGGuider",
+                "inputs": {
+                    "model": ["1", 0],
+                    "positive": ["4", 0],
+                    "negative": ["5", 0],
+                    "cfg": cfg,
+                },
+            },
+            "10": {
+                "class_type": "EmptyFlux2LatentImage",
+                "inputs": {
+                    "width": width,
+                    "height": height,
+                    "batch_size": 1,
+                },
+            },
+            "11": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {
+                    "noise": ["6", 0],
+                    "guider": ["9", 0],
+                    "sampler": ["7", 0],
+                    "sigmas": ["8", 0],
+                    "latent_image": ["10", 0],
+                },
+            },
+            "12": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["11", 0], "vae": ["3", 0]},
+            },
+            "13": {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "images": ["12", 0],
+                    "filename_prefix": f"image/flux2_{job_id}",
                 },
             },
         }
@@ -656,10 +801,11 @@ class ImageRuntime:
         info = json_request(COMFY_BASE + "/object_info", timeout=60)
         missing = [name for name in required if name not in info]
         if missing:
+            label = str(adapter.get("label") or "图像模型")
             raise RuntimeError(
-                "ComfyUI 缺少 Qwen-Image 所需节点："
+                f"ComfyUI 缺少 {label} 所需节点："
                 + "、".join(missing)
-                + "。请更新 Runtime/ComfyUI-GGUF 后重试。"
+                + "。请更新 Runtime/ComfyUI 后重试。"
             )
 
     def _history(self, prompt_id: str) -> dict | None:
@@ -759,11 +905,11 @@ class ImageRuntime:
             self.comfy._ensure_comfyui_server()
             self._verify_required_nodes(adapter)
 
-            label = (
-                "正在构建 Qwen-Image 2.1 GGUF 工作流"
-                if adapter.get("workflow_kind") == "qwen_image_2_1"
-                else "正在构建 Pony SDXL 图像工作流"
-            )
+            workflow_kind = adapter.get("workflow_kind")
+            label = {
+                "qwen_image_2_1": "正在构建 Qwen-Image 2.1 GGUF 工作流",
+                "flux2_klein_4b": "正在构建 FLUX.2 Klein 4B distilled 工作流",
+            }.get(workflow_kind, "正在构建 Pony SDXL 图像工作流")
             self._set_phase("building_workflow", label)
             prompt = build_prompt(installed_names, payload, adapter, job_id)
 
