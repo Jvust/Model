@@ -160,6 +160,42 @@ def task_health(port: int = TASK_PORT) -> bool:
         return False
 
 
+def build_task_command(
+    executable: str,
+    model_path: Path,
+    adapter: dict,
+    *,
+    port: int = TASK_PORT,
+    threads: int = TASK_THREADS,
+    gpu_layers: int = TASK_GPU_LAYERS,
+    context: int = TASK_CONTEXT,
+    batch: int = TASK_BATCH,
+) -> list[str]:
+    return [
+        executable,
+        "-m",
+        str(model_path),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-t",
+        str(threads),
+        "-ngl",
+        str(gpu_layers),
+        "--ctx-size",
+        str(context),
+        "--batch-size",
+        str(batch),
+        "--ubatch-size",
+        str(batch),
+        "--parallel",
+        "1",
+        "--no-webui",
+        *tuple(adapter["flags"]),
+    ]
+
+
 class TaskRuntime:
     def __init__(
         self,
@@ -338,29 +374,7 @@ class TaskRuntime:
                 "llama-server was not found. Configure LLAMA_SERVER_PATH first."
             )
 
-        command = [
-            executable,
-            "-m",
-            str(model_path),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(TASK_PORT),
-            "-t",
-            str(TASK_THREADS),
-            "-ngl",
-            str(TASK_GPU_LAYERS),
-            "--ctx-size",
-            str(TASK_CONTEXT),
-            "--batch-size",
-            str(TASK_BATCH),
-            "--ubatch-size",
-            str(TASK_BATCH),
-            "--parallel",
-            "1",
-            "--no-webui",
-            *tuple(adapter["flags"]),
-        ]
+        command = build_task_command(executable, model_path, adapter)
 
         creationflags = 0
         if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
