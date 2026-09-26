@@ -32,7 +32,7 @@ It:
 4. checks exact file size and SHA256;
 5. writes `MODEL_READY.json` only after all three files pass verification.
 
-The website shows **补齐 FLUX.2 依赖** while one of the fixed artifacts is absent or undersized. This state is intentionally different from **使用图像模型**.
+The website shows **补齐 FLUX.2 依赖** while one of the fixed artifacts is absent or does not match its exact official byte size. This state is intentionally different from **使用图像模型**.
 
 ## Runtime adapter
 
@@ -80,6 +80,6 @@ These are safety floors, not guarantees that every resolution or concurrent work
 
 The code adapter can be complete while the Drive package is still incomplete.
 
-Do not mark FLUX.2 as directly usable until the Drive scan sees all three fixed artifacts with plausible sizes. The web card must continue to show the bootstrap action while companions are missing.
+Do not mark FLUX.2 as directly usable until the Drive scan sees all three fixed artifacts at their exact expected byte sizes. The web card must continue to show the bootstrap action while companions are missing.
 
 Real image-generation validation still requires a supported NVIDIA Runtime (local or private remote Runtime).
