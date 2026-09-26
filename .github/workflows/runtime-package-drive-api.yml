@@ -77,9 +77,16 @@ jobs:
             if (($image.supported_adapters | Measure-Object).Count -lt 3) {
               throw "Expected Pony, Qwen Image and FLUX.2 image adapters in packaged Runtime."
             }
+            $tasks = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/tasks/status" -TimeoutSec 3
+            if (($tasks.supported_adapters | Measure-Object).Count -lt 2) {
+              throw "Expected Qwen embedding and reranker task adapters."
+            }
+            if ([int]$tasks.port -ne 8091) {
+              throw "Expected dedicated task llama-server port 8091."
+            }
             $runtime = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 3
-            if ([int]$runtime.runtime_version -lt 14) {
-              throw "Expected Runtime v0.14 FLUX.2 image API."
+            if ([int]$runtime.runtime_version -lt 15) {
+              throw "Expected Runtime v0.15 task server API."
             }
             if ($runtime.remote_auth_required) {
               throw "Packaged Runtime should not require a remote token by default."
