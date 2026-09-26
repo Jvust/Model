@@ -6,6 +6,24 @@ Google Drive is the canonical model vault. The website discovers model packages 
 
 **Google Drive for desktop is not required.**
 
+## Embedding and reranker task runtime
+
+Qwen3 Embedding 0.6B and Qwen3 Reranker 0.6B use a dedicated llama.cpp task server instead of adding PyTorch/Transformers to the Windows Runtime package.
+
+- chat llama-server: port 8080;
+- task llama-server: port 8091;
+- Embedding: `--embedding --pooling last` → `/v1/embeddings`;
+- Reranker: `--embedding --reranking --pooling rank` → `/v1/rerank`;
+- task context/batch/ubatch: 4096 / 4096 / 4096, parallel 1;
+- task GPU layers default to 0 so CPU-only machines can use the first version.
+
+Drive bootstrap:
+
+    AI-Model-Vault/notebook_launchers/启动_Qwen3_Embedding_Reranker_0.6B_Q8_0_DriveFirst.ipynb
+
+The web card shows the bootstrap action while the exact task GGUF is missing. After a successful rescan, **使用 Embedding** or **使用 Reranker** opens the real vector workspace.
+
+See `docs/QWEN_TASK_RUNTIME.md`.
 ## Default chat bootstrap
 
 The Runtime chat path is already implemented, but the canonical Drive vault may still have no actual chat GGUF. In that state the model library shows **准备默认聊天模型** instead of pretending a registry-only model is runnable.
@@ -169,7 +187,7 @@ FLUX.2 defaults: 1024×1024, 4 steps, CFG 1.0, Euler. See `docs/FLUX2_KLEIN_BOOT
 
 ## Hardware preflight
 
-Runtime v0.14 checks hardware before starting large local workloads.
+Runtime v0.15 checks hardware before starting large local workloads.
 
 - managed ComfyUI: detects `nvidia-smi`, CUDA version, GPU/VRAM and cache free space;
 - Pony image safety floor: 8 GB VRAM;
