@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Check Python syntax
-        run: python -m py_compile runtime/local_bridge.py runtime/backends.py runtime/drive_cache.py runtime/hardware.py runtime/image_runtime.py runtime/video_runtime.py
+        run: python -m py_compile runtime/local_bridge.py runtime/backends.py runtime/drive_cache.py runtime/hardware.py runtime/image_runtime.py runtime/task_runtime.py runtime/video_runtime.py
 
       - name: Run bridge unit tests
         run: python -m unittest discover -s tests -v
@@ -69,6 +69,9 @@ jobs:
           grep -q '/v1/models/plan' runtime/local_bridge.py
           grep -q '/v1/video/generate' runtime/local_bridge.py
           grep -q '/v1/video/status' runtime/local_bridge.py
+          grep -q '/v1/tasks/start' runtime/local_bridge.py
+          grep -q '/v1/tasks/embeddings' runtime/local_bridge.py
+          grep -q '/v1/tasks/rerank' runtime/local_bridge.py
           grep -q 'MODEL_REMOTE_TOKEN' runtime/local_bridge.py
           grep -q 'runtimeToken' assets/app.js
           grep -q 'videoWorkspace' index.html
