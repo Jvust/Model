@@ -255,10 +255,13 @@ class PackageRuntime:
     ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
-            if destination.is_file() and destination.stat().st_size == size:
-                return
             if destination.is_dir():
                 raise RuntimeError(f"Package path is a directory: {destination.name}")
+            try:
+                if destination.is_file() and os.path.samefile(cached, destination):
+                    return
+            except OSError:
+                pass
             destination.unlink()
 
         try:
