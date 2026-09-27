@@ -142,5 +142,12 @@
     if(operation){show("当前任务仍在执行，请先取消或等待完成。");root.scrollIntoView({behavior:"smooth"});return false;}
     selected=model;render();root.scrollIntoView({behavior:"smooth",block:"start"});return true;
   }};
+  window.addEventListener("model-source-changed", () => {
+    if (operation) return;
+    selected = null; output = null;
+    $("workspaceRun").disabled = true; $("workspaceExport").disabled = true;
+    $("workspaceForm").textContent = "";
+    $("workspaceModel").textContent = "来源已更新，请重新选择模型";
+  });
   window.addEventListener("beforeunload",()=>{operation?.controller.abort();if(previewUrl)URL.revokeObjectURL(previewUrl);});
 })();

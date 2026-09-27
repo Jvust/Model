@@ -1,18 +1,22 @@
 {
   "schema_version": 1,
-  "version": "0.17-rc2",
+  "version": "0.18-desktop-rc1",
   "status": "RELEASE_CANDIDATE_PENDING_LIVE_DEPLOYMENT_AND_INTENDED_HOST_ACCEPTANCE",
   "baseline_commit": "eb930ca76b74777435f204946e5dd11d4236ca8a",
   "entrypoint": "runtime/application.py",
   "pr_number": 26,
   "local_website": "http://127.0.0.1:8765/",
   "bundled_cpu_engine_release": "b11146",
-  "source_contract_test_count": 153,
+  "source_contract_test_count": 196,
   "oauth_fixture_check_count": 14,
   "initial_native_cpu_evidence": {
     "commit": "11c028149c458b5b5a49e0ccf226cb7321437976",
     "actions_run_id": 36267127694,
-    "passed": ["got_ocr2", "chronos_2", "timesfm_2_0_500m"],
+    "passed": [
+      "got_ocr2",
+      "chronos_2",
+      "timesfm_2_0_500m"
+    ],
     "user_drive_or_device_tested": false,
     "ocr_accuracy_benchmark": false
   },
@@ -28,5 +32,12 @@
     "real NVIDIA image and video outputs",
     "two-device private HTTPS and authenticated returned media",
     "owner review and merge authorization"
-  ]
+  ],
+  "desktop_source": {
+    "implementation": "read-only native-selected root + on-demand copy cache",
+    "web_oauth_required": false,
+    "api_mode_retained": true,
+    "actual_user_drivefs_tested": false,
+    "validation": "read attached commit Actions; local filesystem tests pass"
+  }
 }

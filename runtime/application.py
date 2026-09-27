@@ -11,14 +11,20 @@ try:
     from . import local_bridge as bridge
     from .native_runtime import NativeRuntime
     from .native_worker import CATALOG
+    from .desktop_source import DesktopSource, DesktopAwareCache, payload_specs, PREFIX
     from .chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 except ImportError:
     import local_bridge as bridge
     from native_runtime import NativeRuntime
     from native_worker import CATALOG
+    from desktop_source import DesktopSource, DesktopAwareCache, payload_specs, PREFIX
     from chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 
-VERSION = 17
+VERSION = 18
+DESKTOP = DesktopSource(bridge.DRIVE_CACHE.root)
+bridge.DRIVE_CACHE = DesktopAwareCache(bridge.DRIVE_CACHE.root, DESKTOP)
+for engine in (bridge.IMAGE, bridge.TASK, bridge.PACKAGE):
+    engine.drive_cache = bridge.DRIVE_CACHE
 bridge.STATE = ProfiledRuntimeState()
 bridge.ALLOWED_ORIGINS.update({f"http://127.0.0.1:{bridge.BRIDGE_PORT}", f"http://localhost:{bridge.BRIDGE_PORT}"})
 SITE_ROOT = Path(sys._MEIPASS) / "site" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
@@ -44,7 +50,7 @@ def byte_range(header, size):
 
 
 class ApplicationHandler(bridge.Handler):
-    server_version = "DriveModelBridge/0.17"
+    server_version = "DriveModelBridge/0.18"
 
     def _gate(self):
         if not self._origin_allowed():
@@ -111,7 +117,16 @@ class ApplicationHandler(bridge.Handler):
             return
         if path.startswith("/v1/") and not self._gate():
             return
-        if path == "/v1/native/catalog":
+        if path == "/v1/desktop/status":
+            self._json(200, DESKTOP.status())
+        elif path == "/v1/desktop/snapshot":
+            with DESKTOP.lock:
+                snapshot = DESKTOP.snapshot_data
+            if snapshot is None:
+                self._json(409, {"error": "请先完成当前 Runtime 的桌面版目录扫描"})
+            else:
+                self._json(200, snapshot)
+        elif path == "/v1/native/catalog":
             self._json(200, {"models": [{"model_id": key, **value, "execution_verified": False} for key, value in CATALOG.items()]})
         elif path == "/v1/native/status":
             self._json(200, NATIVE.snapshot())
@@ -129,13 +144,54 @@ class ApplicationHandler(bridge.Handler):
                 self._json(404, {"error": str(error)})
         elif path == "/v1/runtime":
             state = bridge.STATE.snapshot()
-            state.update(runtime_version=VERSION, drive_api_session=bool(bridge.DRIVE_SESSION.access_token), cache_root_label=bridge.DRIVE_CACHE.root.name, llama_server_found=bridge.resolve_llama_server() is not None, bridge_port=bridge.BRIDGE_PORT, model_server_port=bridge.MODEL_SERVER_PORT, video=bridge.VIDEO.snapshot(), image=bridge.IMAGE.snapshot(), task=bridge.TASK.snapshot(), package=bridge.PACKAGE.snapshot(), native=NATIVE.snapshot(), hardware=bridge.runtime_hardware_snapshot(), remote_auth_required=bool(bridge.REMOTE_TOKEN))
+            state.update(runtime_version=VERSION, drive_api_session=bool(bridge.DRIVE_SESSION.access_token), cache_root_label=bridge.DRIVE_CACHE.root.name, llama_server_found=bridge.resolve_llama_server() is not None, bridge_port=bridge.BRIDGE_PORT, model_server_port=bridge.MODEL_SERVER_PORT, video=bridge.VIDEO.snapshot(), image=bridge.IMAGE.snapshot(), task=bridge.TASK.snapshot(), package=bridge.PACKAGE.snapshot(), native=NATIVE.snapshot(), desktop=DESKTOP.status(), hardware=bridge.runtime_hardware_snapshot(), remote_auth_required=bool(bridge.REMOTE_TOKEN))
             self._json(200, state)
         else:
             super().do_GET()
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith("/v1/desktop/"):
+            if not self._gate():
+                return
+            try:
+                data = self._read_json()
+                if not isinstance(data, dict):
+                    raise ValueError("JSON object required")
+                # The network API never accepts an arbitrary host path.
+                if any(key in data for key in ("root", "path", "directory", "config_path")):
+                    raise ValueError("请使用 Runtime 电脑上的原生目录选择器；API 不接受任意本机路径")
+                if path in {"/v1/desktop/pick", "/v1/desktop/scan"}:
+                    states = [bridge.STATE.snapshot(), bridge.TASK.snapshot(), bridge.IMAGE.snapshot(), bridge.VIDEO.snapshot(), bridge.PACKAGE.snapshot(), NATIVE.snapshot()]
+                    if any(state.get("running") or state.get("phase") in {"downloading", "loading", "starting", "cancelling"} for state in states):
+                        raise RuntimeError("请先停止当前模型和任务，再更换或扫描桌面版目录")
+                if path == "/v1/desktop/pick":
+                    hosts = {f"127.0.0.1:{bridge.BRIDGE_PORT}", f"localhost:{bridge.BRIDGE_PORT}"}
+                    origins = {"http://" + host for host in hosts}
+                    if self.client_address[0] != "127.0.0.1" or self.headers.get("Host") not in hosts or self.headers.get("Origin") not in origins or self.headers.get("X-Forwarded-Host") or self.headers.get("Forwarded"):
+                        self._json(403, {"error": "目录授权只能从该 Windows 主机的本机网页发起"})
+                        return
+                    self._json(202, DESKTOP.pick())
+                elif path == "/v1/desktop/scan":
+                    self._json(202, DESKTOP.start_scan())
+                elif path == "/v1/desktop/stop":
+                    self._json(200, DESKTOP.stop())
+                elif path == "/v1/desktop/probe":
+                    specs = payload_specs(data)
+                    if len(specs) != 1 or not specs[0].file_id.startswith(PREFIX):
+                        raise ValueError("One scanned desktop file is required")
+                    item = DESKTOP.resolve(specs[0])
+                    with item.checked_path().open("rb") as stream:
+                        count = len(stream.read(4096))
+                    item.checked_path()
+                    self._json(200, {"ok": True, "bytes": count, "source": "desktop", "full_file_verified": False})
+                else:
+                    self._json(404, {"error": "Unknown desktop route"})
+            except (ValueError, TypeError, KeyError, OSError) as error:
+                self._json(400, {"error": str(error)})
+            except RuntimeError as error:
+                self._json(409, {"error": str(error)})
+            return
         if path == "/v1/chat/profile":
             if not self._gate():
                 return
@@ -177,12 +233,13 @@ class ApplicationHandler(bridge.Handler):
 
 def main():
     server = ThreadingHTTPServer((bridge.HOST, bridge.BRIDGE_PORT), ApplicationHandler)
-    print(f"Drive Model Runtime 0.17 · {bridge.HOST}:{bridge.BRIDGE_PORT}")
+    print(f"Drive Model Runtime 0.18 · {bridge.HOST}:{bridge.BRIDGE_PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        DESKTOP.stop()
         NATIVE.stop()
         if NATIVE.thread:
             NATIVE.thread.join(timeout=10)

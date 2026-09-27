@@ -25,7 +25,7 @@ $env:MODEL_GPU_LAYERS = "$GpuLayers"
 $env:MODEL_LOAD_MODE = "$LoadMode"
 $env:MODEL_READY_WARN_SECONDS = "$ReadyWarnSeconds"
 if ($Threads -gt 0) { $env:MODEL_THREADS = "$Threads" }
-Write-Host "Drive Model Runtime v0.17" -ForegroundColor Cyan
+Write-Host "Drive Model Runtime v0.18" -ForegroundColor Cyan
 Write-Host "Cache: $env:MODEL_CACHE_ROOT"
 Write-Host "Bridge: http://127.0.0.1:$BridgePort"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

@@ -438,7 +438,7 @@ class RuntimeState:
         def progress(received: int, total: int | None) -> None:
             with self.lock:
                 if self.job_id != job_id:
-                    return
+                    raise InterruptedError("Model copy/download cancelled")
                 self.downloaded_bytes = received
                 self.download_total_bytes = total
 
@@ -1119,7 +1119,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 model_name = str(payload.get("display_name") or payload.get("name") or spec.name)
                 relative_path = str(payload.get("relative_path") or spec.name)
-                token = DRIVE_SESSION.get()
+                token = DRIVE_CACHE.access_token(payload, DRIVE_SESSION.get)
                 result = STATE.start_drive(
                     spec,
                     model_name,

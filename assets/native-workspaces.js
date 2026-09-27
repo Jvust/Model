@@ -135,6 +135,9 @@
     $("nativeVideo").hidden = true; if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = null; }
     await poll(generation);
   }
+  window.addEventListener("model-source-changed", () => {
+    if (!$("nativeModel").disabled) refresh().catch(showError);
+  });
   $("nativeRefresh").onclick = () => refresh().catch(showError);
   $("nativeModel").onchange = selectModel;
   $("nativePlan").onclick = () => checkPlan().catch(showError);

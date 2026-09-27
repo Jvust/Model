@@ -133,7 +133,7 @@ class NativeRuntime:
         if not plan["ready"]:
             raise ValueError("; ".join(plan["reasons"]))
         package, files = validate_manifest(model_id, payload)
-        token = self.token_provider()  # memory only, never written into worker inputs
+        token = self.cache.access_token(payload, self.token_provider)  # memory only, never written into worker inputs
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise RuntimeError("A native job is already active or cancelling")
