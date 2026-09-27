@@ -1,0 +1,3 @@
+Apply the integrity-checked desktop-source patch to the dedicated staging branch only.
+Baseline: 5216d01f2c7829b30b9a2bedbed7d1fec523c927
+Decoded patch SHA256: e9690d99bcd3cdf991e449a6153a94c1271450cf569358ce1693dcf4aa7c48e7
