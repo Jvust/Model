@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from http.server import ThreadingHTTPServer
 
-from runtime.desktop_source import DesktopSource, DesktopAwareCache, PREFIX, CHUNK, is_link, safe_parts
+from runtime.desktop_source import DesktopSource, DesktopAwareCache, PREFIX, CHUNK, MAX_METADATA, is_link, safe_parts
 from runtime.drive_cache import DriveFileSpec
 from runtime import application
 
@@ -82,6 +82,19 @@ class DesktopFixture(unittest.TestCase):
         (self.model.parent/'empty.gguf').touch()
         snapshot = self.scan(); self.assertEqual(snapshot['files'],1)
         self.assertIn('空文件', '\n'.join(snapshot['warnings']))
+
+    def test_large_support_file_is_indexed_without_content_read(self):
+        support = self.vault/'video_ultra'/'Wan2.2-T2V-A14B'/'google'/'umt5-xxl'/'tokenizer.json'
+        support.parent.mkdir(parents=True)
+        with support.open('wb') as stream:
+            stream.truncate(MAX_METADATA + 1024)
+        with patch.object(Path, 'open', side_effect=AssertionError('large support content must not be opened during scan')):
+            snapshot, files = self.source.scan(self.vault)
+        self.assertEqual(snapshot['files'], 2)
+        self.assertFalse(any('支持文件超出' in warning for warning in snapshot['warnings']))
+        matched = [item for item in files.values() if item.relative.endswith('tokenizer.json')]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0].version[0], MAX_METADATA + 1024)
 
     def test_symlink_skipped(self):
         outside = Path(self.tmp.name)/'private.gguf'; outside.write_bytes(b'private')
