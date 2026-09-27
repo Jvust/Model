@@ -232,7 +232,9 @@ $d.Dispose()
                     if entry.name.startswith(".") or entry.name == "__pycache__":
                         continue
                     rel = relative + "/" + entry.name if relative else entry.name
-                    info = entry.stat(follow_symlinks=False)
+                    # DirEntry.stat() omits Windows volume/file IDs. Use the same
+                    # metadata source as later path/fd checks; do not weaken identity validation.
+                    info = os.stat(entry.path, follow_symlinks=False)
                     if is_link(Path(entry.path), info):
                         if len(warnings) < 30:
                             warnings.append("跳过链接或 junction：" + rel)
