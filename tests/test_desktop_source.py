@@ -55,7 +55,7 @@ class DesktopFixture(unittest.TestCase):
 
     def test_current_readonly_handle(self):
         self.assertTrue(self.spec.file_id.startswith(PREFIX))
-        self.assertEqual(self.source.resolve(self.spec).checked_path(), self.model)
+        self.assertEqual(self.source.resolve(self.spec).checked_path(), self.model.resolve())
 
     def test_scanned_id_stable_on_rescan(self):
         first = self.spec.file_id; self.scan(); self.assertEqual(first, self.spec.file_id)
