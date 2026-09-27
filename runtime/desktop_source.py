@@ -246,10 +246,9 @@ $d.Dispose()
                         ext = Path(entry.name).suffix.lower()
                         if ext not in WEIGHTS | SUPPORT:
                             continue
-                        if ext in SUPPORT and info.st_size > MAX_METADATA:
-                            if len(warnings) < 30:
-                                warnings.append("支持文件超出 16 MiB：" + rel)
-                            continue
+                        # Support files can legitimately be large (for example tokenizer.json).
+                        # Index them by stat only; scanning must not read their contents.
+                        # MAX_METADATA applies only to the root model_metadata.json content read below.
                         if info.st_size <= 0:
                             if len(warnings) < 30:
                                 warnings.append("空文件未加入可用清单：" + rel)
