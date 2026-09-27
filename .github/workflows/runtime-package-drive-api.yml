@@ -2,7 +2,7 @@ name: desktop-source-staging-apply
 on:
   push:
     branches: [work/model-drive-desktop-20260927]
-    paths: [.github/desktop-apply.trigger]
+    paths: [.github/desktop-apply.trigger, .github/workflows/runtime-package-drive-api.yml]
 permissions:
   contents: write
 jobs:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Verify fixed-base patch and prepare final tracked source
+      - name: Verify fixed-base patch and prepare tracked source
         shell: bash
         run: |
           python - <<'PY'
@@ -28,38 +28,19 @@ jobs:
           subprocess.run(['git', 'merge-base', '--is-ancestor', baseline, 'HEAD'], check=True)
           archive = Path('.github/desktop-feature.patch.gz.b64')
           encoded = archive.read_text().strip()
-          # Correct explicitly identified transport transcription errors; the entire
-          # decoded patch must still match the independently recorded SHA256.
           for old, new in [('MOXHH7Tev','MOXH7Tev'), ('TPnvfL6BE','TPnvf6BE'), ('tadsyBktAm','tadsyB6Am'), ('EvvrFF19/r','EvvrF19/r'), ('QXut1nN4t','QXut1n4t'), ('XlQ3H9tt5','XlQ3H9t5'), ('JgXdOXVV3','JgXdOXV3')]:
               encoded = encoded.replace(old, new)
           raw = gzip.decompress(base64.b64decode(encoded, validate=True))
           if hashlib.sha256(raw).hexdigest() != 'e9690d99bcd3cdf991e449a6153a94c1271450cf569358ce1693dcf4aa7c48e7':
               raise RuntimeError('Patch integrity check failed; nothing applied')
+          if b'+++ b/.github/workflows/' in raw:
+              raise RuntimeError('This staging bot only applies application source changes')
           patch = Path('.github/desktop-feature.patch')
           patch.write_bytes(raw)
-          workflow = Path('.github/workflows/runtime-package-drive-api.yml')
-          workflow.write_bytes(subprocess.check_output(['git','show',baseline+':'+workflow.as_posix()]))
           subprocess.run(['git','apply','--check',str(patch)], check=True)
           subprocess.run(['git','apply',str(patch)], check=True)
-          text = workflow.read_text()
-          replacements = [
-              ('[int]$health.version -ne 17', '[int]$health.version -ne 18'),
-              ('[int]$runtime.runtime_version -ne 17', '[int]$runtime.runtime_version -ne 18'),
-              ('@{ version = 17;', '@{ version = 18;'),
-              ('Model-0.17-RC-', 'Model-0.18-Desktop-'),
-              ('run: python -m tools.check_browser', 'run: |\n          python -m tools.check_browser\n          python -m tools.check_desktop_browser'),
-              ('run: python -m tools.smoke_gguf_models', 'run: |\n          python -m tools.smoke_gguf_models\n          python -m tools.smoke_desktop_gguf'),
-          ]
-          for before, after in replacements:
-              if text.count(before) != 1:
-                  raise RuntimeError('Unexpected workflow contract: '+before)
-              text = text.replace(before, after)
-          needle = '            New-Item -ItemType Directory -Force qa-evidence | Out-Null'
-          if text.count(needle) != 1: raise RuntimeError('Unexpected package evidence block')
-          text = text.replace(needle, '            $desktop = Invoke-RestMethod "http://127.0.0.1:8765/v1/desktop/status" -TimeoutSec 5\n            if (-not $desktop.read_only -or -not $desktop.instance_id) { throw "Desktop source endpoint missing" }\n'+needle)
-          workflow.write_text(text, encoding='utf-8')
           archive.unlink(); patch.unlink(); Path('.github/desktop-apply.trigger').unlink()
-          print('Verified patch applied; temporary staging files removed; normal package workflow restored.')
+          print('Verified source patch applied; temporary patch files removed. Workflow changes remain for the authorized connector.')
           PY
       - name: Validate final source before committing
         env:
@@ -71,9 +52,10 @@ jobs:
           node tests/test_model_capabilities.js
           node tests/test_oauth_sessions.mjs
           for file in assets/*.js; do node --check "$file"; done
-      - name: Commit only to the dedicated staging branch
+      - name: Commit application source to the dedicated staging branch
         run: |
           test "${GITHUB_REF}" = "refs/heads/work/model-drive-desktop-20260927"
+          git diff --exit-code -- .github/workflows
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
