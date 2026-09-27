@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "version": "0.18-desktop-rc2",
+  "status": "RELEASE_CANDIDATE_DESKTOP_SOURCE_VERIFIED_IN_CI_PENDING_INTENDED_HOST_ACCEPTANCE",
+  "baseline_commit": "eb930ca76b74777435f204946e5dd11d4236ca8a",
+  "entrypoint": "runtime/application.py",
+  "pr_number": 26,
+  "local_website": "http://127.0.0.1:8765/",
+  "bundled_cpu_engine_release": "b11146",
+  "source_contract_test_count": 196,
+  "oauth_fixture_check_count": 14,
+  "initial_native_cpu_evidence": {
+    "commit": "11c028149c458b5b5a49e0ccf226cb7321437976",
+    "actions_run_id": 36267127694,
+    "passed": [
+      "got_ocr2",
+      "chronos_2",
+      "timesfm_2_0_500m"
+    ],
+    "user_drive_or_device_tested": false,
+    "ocr_accuracy_benchmark": false
+  },
+  "current_commit_test_result": {
+    "commit": "0551384336d7282bb09c840535eea05b0f4e99a5",
+    "ci_run_id": 36287020640,
+    "package_run_id": 36287020646,
+    "ci": "PASS",
+    "package_browser_model_regression": "PASS",
+    "python_tests": 196,
+    "desktop_source_tests": 43,
+    "desktop_browser_checks": 9,
+    "real_qwen_local_directory_cold_warm_chat": "PASS",
+    "actual_google_drive_desktop_mount_tested": false
+  },
+  "oauth_worker_deployed_by_this_change": false,
+  "drive_weights_downloaded_by_this_change": false,
+  "user_device_verified": false,
+  "nvidia_inference_verified": false,
+  "automatic_main_merge_authorized": false,
+  "required_gates": [
+    "actual intended-host Google Drive Desktop/DriveFS scan, streamed-placeholder and disconnect/reconnect validation",
+    "intended-host cold cache, interrupted/resumed copy, and warm-cache reuse with user files",
+    "Cloudflare Worker v2 live deployment and actual user Drive consent for optional API mode",
+    "real NVIDIA image and video outputs",
+    "two-device private HTTPS and authenticated returned media",
+    "owner review and merge authorization"
+  ],
+  "desktop_source": {
+    "implementation": "read-only native-selected root + on-demand copy cache",
+    "web_oauth_required": false,
+    "api_mode_retained": true,
+    "actual_user_drivefs_tested": false,
+    "validation": "PASS on Windows CI local-directory fixture; intended-host Google Drive Desktop/DriveFS validation pending",
+    "cold_warm_cache_real_model_test": "PASS",
+    "oauth_required": false
+  }
+}

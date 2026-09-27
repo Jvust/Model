@@ -1,6 +1,9 @@
 (function () {
   "use strict";
 
+  let sourceGeneration = 0;
+  let modelSource = "api";
+  let desktopInstance = null;
   let accessToken = null;
   let models = [];
   let runtimeBase = "";
@@ -103,6 +106,14 @@
   }
 
   async function syncRuntimeDriveSession() {
+    if (modelSource === "desktop") {
+      const response = await runtimeFetch("/v1/desktop/status", { cache: "no-store" });
+      const state = await response.json();
+      if (!response.ok || !state.snapshot_ready || state.instance_id !== desktopInstance) {
+        throw new Error("请在当前 Runtime 重新扫描桌面版模型目录。");
+      }
+      return true;
+    }
     if (!accessToken) {
       await ensureAccessToken();
     }
@@ -291,6 +302,7 @@
   }
 
   function saveRuntimeBase() {
+    const oldBase = runtimeBase;
     runtimeBase = normalizeRuntimeBase(
       $("runtimeUrl").value.trim() || window.MODEL_CONFIG.runtimeBase
     );
@@ -302,6 +314,7 @@
       sessionStorage.removeItem("model_runtime_token");
     }
     $("runtimeUrl").value = runtimeBase;
+    if (oldBase && oldBase !== runtimeBase && modelSource === "desktop") useModelSource("desktop");
   }
 
   function saveDriveSelection(folder) {
@@ -313,6 +326,7 @@
   }
 
   async function ensureAccessToken() {
+    if (modelSource === "desktop") throw new Error("当前是桌面版来源；请使用桌面目录扫描，或切回 Drive API。");
     if (!accessToken) {
       accessToken = await window.DriveModelClient.getAccessToken();
     }
@@ -372,6 +386,10 @@
   }
 
   async function openChatBootstrap(button) {
+    if (modelSource === "desktop") {
+      window.open("https://colab.research.google.com/github/Jvust/Model/blob/feat/model-release-v017-20260927/notebooks/Prepare_Models.ipynb", "_blank", "noopener,noreferrer");
+      return;
+    }
     showError("");
     button.disabled = true;
     try {
@@ -425,6 +443,10 @@
   }
 
   async function openFlux2Bootstrap(button) {
+    if (modelSource === "desktop") {
+      showError("请在 Drive 桌面版中打开已有 FLUX.2 补齐依赖 Notebook，完成并同步后重新扫描。本模式不会为补齐模型而请求网页 OAuth。");
+      return;
+    }
     showError("");
     button.disabled = true;
     try {
@@ -474,6 +496,10 @@
   }
 
   async function openTaskBootstrap(button) {
+    if (modelSource === "desktop") {
+      window.open("https://colab.research.google.com/github/Jvust/Model/blob/feat/model-release-v017-20260927/notebooks/Prepare_Models.ipynb", "_blank", "noopener,noreferrer");
+      return;
+    }
     showError("");
     button.disabled = true;
     try {
@@ -1495,11 +1521,21 @@
         const probe = document.createElement("button");
         probe.type = "button";
         probe.dataset.icon = "chart";
-        probe.textContent = "Drive Range";
+        probe.textContent = modelSource === "desktop" ? "测试桌面读取" : "Drive Range";
         probe.addEventListener("click", async () => {
           showError("");
           probe.disabled = true;
           try {
+            if (modelSource === "desktop") {
+              const response = await runtimeFetch("/v1/desktop/probe", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ drive_file_id: representative.id, file_name: representative.name, size: Number(representative.size) })
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(result.error || "桌面读取失败");
+              setStatus("桌面读取成功 · " + result.bytes + " bytes（不是完整性验收）");
+              return;
+            }
             await ensureAccessToken();
             const result = await window.DriveModelClient.probeRange(
               representative,
@@ -1643,6 +1679,11 @@
   }
 
   async function scanDrive() {
+    if (modelSource === "desktop") {
+      if (window.ModelDesktop) await window.ModelDesktop.scan();
+      return;
+    }
+    const ticket = ++sourceGeneration;
     showError("");
     const button = $("scanBtn");
     button.disabled = true;
@@ -1721,6 +1762,7 @@
         }
       }
 
+      if (ticket !== sourceGeneration || modelSource !== "api") return;
       window.DriveModelIndex.saveSnapshot(
         result.rootFolder,
         result.tree,
@@ -1798,7 +1840,7 @@
 
       setStatus(
         data.phase === "downloading"
-          ? "正在从 Google Drive 下载到本机缓存…"
+          ? (modelSource === "desktop" ? "正在从桌面版读取到本机缓存…" : "正在从 Google Drive 下载到本机缓存…")
           : data.ready
             ? "本机模型已就绪"
             : "本机模型正在加载"
@@ -1834,13 +1876,53 @@
     }
   }
 
+  function sourceControls() {
+    const desktop = modelSource === "desktop";
+    $("loginBtn").hidden = desktop;
+    $("findVaultBtn").hidden = desktop;
+    $("folderName").closest(".panel").hidden = desktop;
+    $("scanBtn").textContent = desktop ? "扫描桌面版目录" : "扫描模型";
+  }
+
+  function sourceStorage() {
+    window.DriveModelIndex.setSource(modelSource === "desktop" ? "desktop:" + runtimeBase : "");
+  }
+
+  function useModelSource(mode) {
+    if (!["api", "desktop"].includes(mode)) throw new Error("未知模型来源");
+    modelSource = mode;
+    desktopInstance = null;
+    localStorage.setItem("model_source_mode", mode);
+    sourceStorage(); sourceGeneration++;
+    if (mode === "desktop") window.DriveModelIndex.clearSnapshot();
+    closeVideoWorkspace(); selectedVideoModel = null;
+    const snapshot = mode === "api" ? window.DriveModelIndex.loadSnapshot() : null;
+    models = snapshot ? window.DriveModelIndex.flattenPackages(snapshot.tree, snapshot.registry) : [];
+    sourceControls(); renderModels();
+    setStatus(mode === "desktop" ? "桌面版模式：选择目录并扫描，无需网页 OAuth" : "Drive API 模式");
+    window.dispatchEvent(new Event("model-source-changed"));
+  }
+
+  function acceptDesktopSnapshot(snapshot) {
+    if (modelSource !== "desktop" || !snapshot.complete || snapshot.source !== "desktop") throw new Error("无效桌面版快照");
+    sourceStorage();
+    window.DriveModelIndex.saveSnapshot(snapshot.rootFolder, snapshot.tree, snapshot.registry, true);
+    desktopInstance = snapshot.instance_id;
+    models = window.DriveModelIndex.flattenPackages(snapshot.tree, snapshot.registry);
+    renderModels();
+    setStatus("桌面版扫描完成 · " + snapshot.folders + " 文件夹 · " + models.length + " 模型包");
+    window.dispatchEvent(new Event("model-source-changed"));
+  }
+
   window.ModelApp = {
     runtimeBase: () => runtimeBase || window.MODEL_CONFIG.runtimeBase,
     runtimeFetch,
     runtimeHeaders,
+    source: () => modelSource,
+    useModelSource,
+    acceptDesktopSnapshot,
     syncRuntimeDriveSession: async () => {
       saveRuntimeBase();
-      await ensureAccessToken();
       await syncRuntimeDriveSession();
       return true;
     }
@@ -1868,7 +1950,9 @@
     $("runtimeUrl").value = runtimeBase;
     $("runtimeToken").value = runtimeToken;
 
-    const snapshot = window.DriveModelIndex.loadSnapshot();
+    modelSource = localStorage.getItem("model_source_mode") === "desktop" ? "desktop" : "api";
+    sourceStorage(); sourceControls();
+    const snapshot = modelSource === "api" ? window.DriveModelIndex.loadSnapshot() : null;
     if (snapshot) {
       models = window.DriveModelIndex.flattenPackages(
         snapshot.tree,
@@ -1886,7 +1970,7 @@
 
     renderChat();
 
-    accessToken = await window.DriveModelClient.getAccessToken();
+    accessToken = modelSource === "api" ? await window.DriveModelClient.getAccessToken() : null;
     $("loginBtn").textContent =
       accessToken ? "Drive 已连接" : "连接 Google Drive";
 

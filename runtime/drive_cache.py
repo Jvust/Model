@@ -96,6 +96,10 @@ class DriveCache:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
 
+    def access_token(self, payload: dict, provider: Callable[[], str]) -> str:
+        """Resolve upstream credentials; desktop cache overrides only scanned local IDs."""
+        return provider()
+
     def _paths(self, spec: DriveFileSpec) -> tuple[Path, Path, Path]:
         stem = cache_key(spec.file_id)
         suffix = safe_extension(spec.name)

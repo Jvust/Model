@@ -204,7 +204,7 @@ class PackageRuntime:
 
     def start(self, payload: dict) -> dict:
         package_path, files = normalize_manifest(payload)
-        token = self.token_provider()
+        token = self.drive_cache.access_token(payload, self.token_provider)
 
         with self.lock:
             if self.thread and self.thread.is_alive():

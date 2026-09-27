@@ -1,0 +1,15 @@
+(() => {
+  'use strict';
+  const root=document.createElement('details');root.className='panel';root.style.marginTop='16px';
+  root.innerHTML=`<summary>聊天模型独立参数（Qwen / DeepSeek / Coder / 写作）</summary><p>按模型保存上下文、CPU 线程、GPU 层数和加载方式；修改后下次启动生效。较大上下文需要更多内存，CPU 安装包不提供 CUDA 加速。</p><select id="profileModel" style="max-width:100%"></select><button id="profileRefresh" type="button">读取已扫描聊天模型</button><div class="video-settings"><label>上下文 <input id="profileContext" type="number" min="512" max="32768" value="4096"></label><label>CPU 线程 <input id="profileThreads" type="number" min="1" max="256" value="2"></label><label>GPU 层数 <input id="profileGpu" type="number" min="0" max="256" value="0"></label><label>加载方式 <select id="profileLoad"><option>none</option><option>auto</option><option>mmap</option><option>mlock</option><option>mmap+mlock</option><option>dio</option></select></label></div><button id="profileSave" type="button" disabled>保存此模型参数</button><p id="profileStatus">连接 Runtime、扫描模型后使用。</p>`;
+  document.querySelector('.chat-panel').after(root);
+  const $=id=>document.getElementById(id);let models=[];
+  const status=text=>{$('profileStatus').textContent=String(text);};
+  async function request(value){const response=await window.ModelApp.runtimeFetch('/v1/chat/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});const data=await response.json();if(!response.ok)throw new Error(data.error||'参数请求失败');return data;}
+  function selected(){const model=models[Number($('profileModel').value)];if(!model)throw new Error('尚未发现聊天 GGUF');return model;}
+  async function read(){const model=selected();const {profile}=await request({name:model.name,relative_path:model.relativePath});$('profileContext').value=profile.context;$('profileThreads').value=profile.threads;$('profileGpu').value=profile.gpu_layers;$('profileLoad').value=profile.load_mode;$('profileSave').disabled=false;status('已读取 '+model.name+' 独立参数。');}
+  $('profileRefresh').onclick=()=>{try{const snapshot=window.DriveModelIndex.loadSnapshot();models=snapshot?window.DriveModelIndex.flattenPackages(snapshot.tree,snapshot.registry).filter(model=>model.directLaunch&&!model.vaultMissing):[];$('profileModel').textContent='';models.forEach((model,i)=>{const option=document.createElement('option');option.value=i;option.textContent=model.name;$('profileModel').append(option);});read().catch(error=>status(error.message));}catch(error){status(error.message);}};
+  window.addEventListener('model-source-changed',()=>{$('profileSave').disabled=true;models=[];$('profileModel').textContent='';});
+  $('profileModel').onchange=()=>read().catch(error=>status(error.message));
+  $('profileSave').onclick=async()=>{try{const model=selected();await request({name:model.name,relative_path:model.relativePath,profile:{context:Number($('profileContext').value),threads:Number($('profileThreads').value),gpu_layers:Number($('profileGpu').value),load_mode:$('profileLoad').value}});status('参数已保存；下次启动此模型时生效。');}catch(error){status(error.message);}};
+})();
