@@ -311,7 +311,7 @@ class TaskRuntime:
         spec = task_file_spec(payload, adapter)
         if not self.executable_provider():
             raise FileNotFoundError("llama-server is missing; no model download was started")
-        token = self.token_provider()
+        token = self.drive_cache.access_token(payload, self.token_provider)
 
         self.stop()
         with self.lock:

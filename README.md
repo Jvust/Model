@@ -1,6 +1,10 @@
 # Model — Drive-first AI Runtime
 
-## 0.17 consolidated release candidate
+## 0.18 optional Drive Desktop source
+
+New: [Drive Desktop source guide](docs/DESKTOP_SOURCE.md). The original API mode remains available. Desktop mode uses a native Windows directory picker, metadata-only scans and read-only, resumable local copies into the Runtime cache; it does not require the web OAuth Worker. Hardware/model adapters remain unchanged.
+
+### Previous 0.17 consolidated release candidate
 
 **Start with [`docs/使用与验收.md`](docs/使用与验收.md).**
 

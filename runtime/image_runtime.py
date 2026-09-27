@@ -640,7 +640,7 @@ class ImageRuntime:
         if self.comfy.snapshot().get("running"):
             raise RuntimeError("已有视频任务正在使用 ComfyUI，请先等待或停止视频任务。")
 
-        self.token_provider()
+        self.drive_cache.access_token(payload, self.token_provider)
         checkpoint_spec(payload, adapter)
 
         with self.lock:
@@ -921,7 +921,7 @@ class ImageRuntime:
         try:
             adapter = ADAPTERS[adapter_key]
             specs = artifact_specs(payload, adapter)
-            token = self.token_provider()
+            token = self.drive_cache.access_token(payload, self.token_provider)
 
             self._set_phase("preparing_comfyui", "正在准备 managed ComfyUI")
             portable, python, _ = self.comfy._ensure_comfyui()

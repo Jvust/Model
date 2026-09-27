@@ -183,6 +183,13 @@
 - Runtime v0.16 增加 `/v1/packages/status|materialize|stop`。它使用现有 DriveCache 断点缓存，按原相对路径恢复完整本地模型目录；大型权重优先硬链接，硬链接失败时拒绝偷偷复制几十 GB。
 - Wan2.2 T2V/I2V Drive 审计确认：high/low-noise 都是 6 片 Diffusers safetensors + index/config 的目录格式，因此不能直接接 ComfyUI `UNETLoader`。下一步改为 Drive package materializer → managed Diffusers video worker，避免当前 ComfyUI 模板从外网重复下载几十/上百 GB。
 
+## 桌面版来源扩展（2026-09-27）
+
+- 根据用户新增要求，增加可选 Drive 桌面版目录来源，不替代、不删除原 API/OAuth 路线。
+- 原生本机目录授权、元数据扫描、只读按需缓存、源文件版本检查和取消后续读已接入现有模型工作区；桌面模式不获取网页 OAuth。
+- 原有权重、适配器和硬件三项门槛不变。普通目录与 CI 验证不能代替用户 DriveFS 挂载和目标 GPU 验收。
+- 详细行为和边界见 `docs/DESKTOP_SOURCE.md`；首次读取仍可能由 Drive 桌面版下载，不能承诺零磁盘占用。
+
 ## 完成定义
 
 当用户在模型卡片上点击“使用模型”后，网页能自动完成检查、按需读取缓存、启动正确后端、提交任务并返回结果；如果模型当前不能运行，网页能在点击前准确说明缺少的权重、适配器或硬件条件。

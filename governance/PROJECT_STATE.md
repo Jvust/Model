@@ -1,7 +1,7 @@
 # Model Project State
 
 Updated: 2026-09-27
-Status: **0.17 consolidated release candidate — implementation and CPU verification; live deployment / intended-host acceptance pending**
+Status: **0.18 optional read-only Drive Desktop source — API mode retained; intended-host acceptance pending**
 
 Authority: `Jvust/Model`. The growth plan remains `MODEL_ENABLEMENT_PLAN.md`; this status does not redefine its completion criteria.
 Baseline before this release work: `eb930ca76b74777435f204946e5dd11d4236ca8a`.
@@ -52,3 +52,9 @@ The Worker source is committed but Cloudflare is a separate deployment. No Cloud
 5. Review/authorize release merge. Source completion, Actions success, Drive weight presence, and intended-host acceptance must not be conflated.
 
 See `docs/使用与验收.md`, `docs/RELEASE_ACCEPTANCE.md` and `governance/RELEASE_STATE.json`.
+
+## 0.18 Desktop source extension
+
+User now authorizes an additional Google Drive Desktop path. This does not remove the API-first option. DesktopSource grants one locally selected root; DesktopAwareCache resolves current scan handles and skips upstream OAuth only for those files. Cloud IDs still use the original credential provider. API and per-Runtime desktop indexes are isolated.
+
+Local tests: 196 Python tests (43 new desktop cases) pass. The local browser cannot navigate localhost under its policy; offline DOM checks use mocked transport, and CI carries the real localhost browser + actual Qwen filesystem-source smoke tests. Check the resulting commit Actions before declaring them passed. The user DriveFS mount and intended GPU remain untested. See `docs/DESKTOP_SOURCE.md`.

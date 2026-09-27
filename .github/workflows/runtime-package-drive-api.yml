@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Test all source contracts
+      - name: Test all source contracts including desktop source
         run: python -m unittest discover -s tests -v
       - name: Test OAuth account isolation with mocked provider
         run: node tests/test_oauth_sessions.mjs
@@ -36,6 +36,7 @@ jobs:
         run: |
           $env:LLAMA_SERVER_PATH = "missing-llama-server.exe"
           $env:MODEL_CACHE_ROOT = "$env:RUNNER_TEMP\model-cache"
+          $env:MODEL_DESKTOP_CONFIG = "$env:RUNNER_TEMP\desktop-source.json"
           $env:MODEL_BRIDGE_PORT = "8765"
           $env:MODEL_SERVER_PORT = "8080"
           $stdout = "$env:RUNNER_TEMP\runtime-stdout.log"
@@ -52,9 +53,9 @@ jobs:
               } catch {}
             }
             if (-not $ok) { throw "Runtime health timed out" }
-            if ([int]$health.version -ne 17) { throw "Old executable packaged" }
+            if ([int]$health.version -ne 18) { throw "Old executable packaged" }
             $homepageResponse = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing -TimeoutSec 5
-            if ($homepageResponse.Content -notmatch "native-workspaces.js" -or $homepageResponse.Content -notmatch "chat-profiles.js") { throw "Embedded website is incomplete" }
+            if ($homepageResponse.Content -notmatch "native-workspaces.js" -or $homepageResponse.Content -notmatch "desktop-source.js") { throw "Embedded website is incomplete" }
             $video = Invoke-RestMethod "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 5
             if (-not $video.workflow_resources_ready -or -not $video.archive_support) { throw "Video resources missing" }
             if (($video.supported_adapters | Measure-Object).Count -lt 2) { throw "Video adapters missing" }
@@ -65,12 +66,14 @@ jobs:
             $package = Invoke-RestMethod "http://127.0.0.1:8765/v1/packages/status" -TimeoutSec 5
             if ($package.phase -ne "idle") { throw "Package materializer not idle" }
             $runtime = Invoke-RestMethod "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 10
-            if ([int]$runtime.runtime_version -ne 17 -or $runtime.remote_auth_required) { throw "Unexpected Runtime version/auth default" }
+            if ([int]$runtime.runtime_version -ne 18 -or $runtime.remote_auth_required) { throw "Unexpected Runtime version/auth default" }
             if ($null -eq $runtime.hardware.memory.available_bytes -or $null -eq $runtime.hardware.cache_disk.free_bytes) { throw "Hardware preflight missing" }
             $native = Invoke-RestMethod "http://127.0.0.1:8765/v1/native/catalog" -TimeoutSec 5
             if (($native.models | Measure-Object).Count -ne 5) { throw "Native adapters missing" }
+            $desktop = Invoke-RestMethod "http://127.0.0.1:8765/v1/desktop/status" -TimeoutSec 5
+            if (-not $desktop.read_only -or -not $desktop.instance_id) { throw "Desktop source endpoint missing" }
             New-Item -ItemType Directory -Force qa-evidence | Out-Null
-            @{ version = 17; executable_smoke = "PASS"; embedded_website = "PASS"; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
+            @{ version = 18; executable_smoke = "PASS"; embedded_website = "PASS"; desktop_endpoint = "PASS"; actual_drive_desktop_tested = $false; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
           } finally {
             if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
           }
@@ -99,7 +102,7 @@ jobs:
             Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name JvustModelRuntime -ErrorAction SilentlyContinue
             $env:LOCALAPPDATA = $originalLocal
           }
-      - name: Read-only public OAuth deployment probe
+      - name: Read-only public OAuth deployment probe (API mode only)
         run: python -m tools.probe_oauth_public
       - name: Assemble matching source, engine and executable
         shell: powershell
@@ -114,7 +117,7 @@ jobs:
           Get-FileHash "$root\runtime\ModelRuntime.exe" -Algorithm SHA256 | Format-List | Out-File "$root\EXE_SHA256.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: Model-0.17-RC-${{ github.sha }}
+          name: Model-0.18-Desktop-${{ github.sha }}
           path: Model-Runtime/
           if-no-files-found: error
   browser:
@@ -127,8 +130,10 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install playwright==1.55.0
       - run: python -m playwright install --with-deps chromium
-      - name: Real browser and localhost HTTP
-        run: python -m tools.check_browser
+      - name: Real browser and localhost HTTP (API and desktop modes)
+        run: |
+          python -m tools.check_browser
+          python -m tools.check_desktop_browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -172,10 +177,12 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install huggingface_hub==0.34.4
       - run: python -m tools.prepare_llama
-      - name: Actual chat, embedding and rerank CPU inference
+      - name: Actual chat, embedding, rerank and desktop-source cold/warm CPU inference
         env:
           HF_HUB_DISABLE_XET: "1"
-        run: python -m tools.smoke_gguf_models
+        run: |
+          python -m tools.smoke_gguf_models
+          python -m tools.smoke_desktop_gguf
       - uses: actions/upload-artifact@v4
         if: always()
         with:

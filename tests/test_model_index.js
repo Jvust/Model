@@ -337,3 +337,15 @@ assert.strictEqual(
 );
 
 console.log("model-index package tests passed");
+
+window.DriveModelIndex.setSource("");
+window.DriveModelIndex.saveSnapshot(tree.file, tree, registry, true);
+window.DriveModelIndex.setSource("desktop:http://127.0.0.1:8765");
+assert.strictEqual(window.DriveModelIndex.loadSnapshot(), null);
+window.DriveModelIndex.saveSnapshot(taskRoot.file, taskRoot, taskRegistry, true);
+assert.strictEqual(window.DriveModelIndex.loadSnapshot().registry.models.length, 2);
+window.DriveModelIndex.setSource("desktop:https://remote.invalid");
+assert.strictEqual(window.DriveModelIndex.loadSnapshot(), null);
+window.DriveModelIndex.setSource("");
+assert.ok(window.DriveModelIndex.loadSnapshot());
+console.log("API / desktop / remote Runtime snapshots are isolated");

@@ -3,6 +3,10 @@
 
   const CACHE_KEY = "drive-model-index-v3";
   const CACHE_VERSION = 3;
+  let sourceKey = "";
+  function snapshotKey() { return sourceKey ? CACHE_KEY + ":" + sourceKey : CACHE_KEY; }
+  function setSource(key = "") { sourceKey = String(key); }
+  function clearSnapshot() { storage()?.removeItem(snapshotKey()); }
 
   const MODEL_EXTENSIONS = new Set([
     ".gguf",
@@ -20,7 +24,8 @@
     ".json",
     ".txt",
     ".yaml",
-    ".yml"
+    ".yml",
+    ".tiktoken"
   ]);
   const MAX_SUPPORT_FILE_BYTES = 16 * 1024 * 1024;
 
@@ -56,7 +61,9 @@
     "resourceKey",
     "parents",
     "driveId",
-    "capabilities"
+    "capabilities",
+    "source",
+    "mayRequireDownload"
   ];
 
   function storage() {
@@ -161,7 +168,7 @@
     const target = storage();
     if (!target) return null;
     try {
-      const raw = target.getItem(CACHE_KEY);
+      const raw = target.getItem(snapshotKey());
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       return valid(parsed) ? parsed : null;
@@ -183,7 +190,7 @@
       registry: sanitizeRegistry(registry)
     };
     try {
-      target.setItem(CACHE_KEY, JSON.stringify(snapshot));
+      target.setItem(snapshotKey(), JSON.stringify(snapshot));
       return true;
     } catch (error) {
       console.warn("保存模型索引失败：", error);
@@ -569,6 +576,8 @@
     flattenPackages,
     isModelFile,
     isPackageSupportFile,
+    setSource,
+    clearSnapshot,
     loadSnapshot,
     matchRegistry,
     mountLinkedTree,
