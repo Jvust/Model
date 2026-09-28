@@ -1,30 +1,36 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": "Jvust/Model",
   "candidate": "0.19-activation-rc1",
   "base_commit": "f163f5cc9e76d7f13cf5f48a373727f16d98b365",
   "target_branch": "feat/model-activation-resume-20260928",
+  "implementation_commit": "d514a32795654f94f630a6506ed4273384b21588",
+  "pr_number": 27,
   "items": [
     {
       "id": "github-source-push",
-      "severity": "blocking_before_remote_handoff",
-      "status": "not_done",
-      "reason": "Current exposed GitHub connector methods are read-only; no authenticated writable CLI in container.",
-      "action": "Apply manifest-verified change set onto exact base; push only feature branch; create review PR; do not merge."
+      "severity": "checkpoint",
+      "status": "done",
+      "evidence": "branch commit d514a32795654f94f630a6506ed4273384b21588; PR #27"
     },
     {
       "id": "drive-artifact-archive",
-      "severity": "blocking_before_archive_claim",
-      "status": "not_done",
-      "reason": "Current Drive connector exposes reads but no upload action.",
-      "action": "Upload candidate/change/evidence archives, verify bytes, record actual Drive file IDs and SHA256."
+      "severity": "checkpoint",
+      "status": "done",
+      "evidence": "Drive folder 135xpZx-EDvXyjQyyGCLYpogFvKktr8B1; four file IDs recorded in artifact_manifest.json"
+    },
+    {
+      "id": "remote-ci",
+      "severity": "blocking_before_remote_release_claim",
+      "status": "in_progress",
+      "evidence": "GitHub Actions runs 36435743893 (ci) and 36435743855 (runtime-package-web) triggered for implementation commit"
     },
     {
       "id": "windows-gpu-acceptance",
       "severity": "blocking_before_final_release",
       "status": "not_done",
-      "reason": "No Windows/NVIDIA hardware or actual user DriveFS mount in this execution environment.",
-      "action": "Run prepared Windows build and real intended-host acceptance; retain failures as evidence."
+      "reason": "No direct access to intended Y9000P/actual user DriveFS in this execution environment.",
+      "action": "Validate Windows candidate, real Drive cold/cancel/resume/warm cache, Qwen/FLUX generation, VRAM/RAM and two-device HTTPS; preserve failures."
     }
   ]
 }

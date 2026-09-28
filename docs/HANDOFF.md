@@ -5,7 +5,7 @@
 用户目标：选择模型即可自动准备并启用，之后可复用缓存、参数、输入和已完成任务继续。
 
 基线是PR26分支 `feat/model-release-v017-20260927` 的 `f163f5cc9e76d7f13cf5f48a373727f16d98b365`。
-目标分支 `feat/model-activation-resume-20260928` 已由前一轮创建并重新读回，仍在基线；本轮新代码**仅在交付物内，未推送**。
+目标分支 `feat/model-activation-resume-20260928` 已推送实现提交 `d514a32795654f94f630a6506ed4273384b21588`，评审 PR #27 已创建。四个 0.19 交付物已归档到 Drive；详见 `governance/artifact_manifest.json`。
 
 当前标记 `0.19-activation-rc1`。完整源码及模型引擎分开标识；候选包没有新编译的ModelRuntime.exe，不可调用旧0.18EXE后声称获得0.19。
 
@@ -24,7 +24,7 @@
 
 ## 下次必须先做
 
-1. 查看 `governance/pending_sync.json`；恢复写入能力后同步交付变更到目标分支，基线变更则先对账。不要覆盖main或自动合并PR26。
+1. 查看 `governance/pending_sync.json` 和 PR #27 的最新 CI；源码/Drive 同步已完成。不要覆盖 main，也不要自动合并 PR #26/#27。
 2. 在干净Windows CI重跑全部测试、打包和EXE smoke；真实网站导航测试不能使用本轮受限环境的DOM替代结果冒充。
 3. 在Y9000P RTX4060 8GB / 32GB RAM跑真实Drive冷缓存→取消→续传→热缓存、FLUX编辑、Qwen量化编辑；保留任务输入摘要、模型提交、输出、峰值VRAM/RAM。
 4. 增补孤儿ComfyUI推理任务核销、所有后端供应链离线哈希锁；再按确切模型族扩展，不把未知safetensors标成可运行。

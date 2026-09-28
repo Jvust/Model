@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
   "version": "0.19-activation-rc1",
-  "status": "LOCAL_SOURCE_CANDIDATE_TESTED_REMOTE_SYNC_AND_HOST_ACCEPTANCE_PENDING",
+  "status": "SOURCE_AND_DRIVE_SYNCED_HOST_ACCEPTANCE_PENDING",
   "base_commit": "f163f5cc9e76d7f13cf5f48a373727f16d98b365",
   "target_branch": "feat/model-activation-resume-20260928",
   "main_merged": false,
-  "remote_candidate_commit": null,
+  "remote_candidate_commit": "d514a32795654f94f630a6506ed4273384b21588",
   "entrypoint": "runtime/application.py",
   "source_launcher": "Run-Model-0.19.cmd",
   "python_tests": 312,
@@ -16,8 +16,8 @@
   "gpu_inference_verified": false,
   "windows_candidate_built": false,
   "user_drivefs_verified": false,
-  "artifact_status": "local_files_not_drive_archived",
-  "updated_at": "2026-09-28T14:05:31.218545+00:00",
+  "artifact_status": "drive_archived_verified_ids_recorded",
+  "updated_at": "2026-09-28T14:25:00Z",
   "previous_release_evidence": {
     "schema_version": 1,
     "version": "0.18-desktop-rc2",
@@ -74,5 +74,18 @@
       "cold_warm_cache_real_model_test": "PASS",
       "oauth_required": false
     }
+  },
+  "pr_number": 27,
+  "drive_folder_id": "135xpZx-EDvXyjQyyGCLYpogFvKktr8B1",
+  "drive_artifact_ids": {
+    "Model-0.19-Activation-Candidate.zip": "1Uel7MZdRKgNHuk4qJQpT7X45Gmrwk214",
+    "Model-0.19-Changes.zip": "1EOLlAFosFE9qhb8XgBcMOrLIzBD-dxh6",
+    "Model-0.19-Verification.md": "14YztA8MqjYnASfh4C6fhFxKlxcW5wMC-",
+    "Model-0.19-SHA256.txt": "1T6c2Mf30-Uz1kQKSwgSAxobZPA5nw-PI"
+  },
+  "remote_ci": {
+    "ci_run_id": 36435743893,
+    "package_run_id": 36435743855,
+    "status": "IN_PROGRESS_AT_SYNC_CHECKPOINT"
   }
 }
