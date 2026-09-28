@@ -229,7 +229,7 @@ class DesktopHTTP(unittest.TestCase):
         conn=http.client.HTTPConnection('127.0.0.1',self.server.server_address[1],timeout=3)
         conn.request('POST' if body is not None else 'GET',path,body=json.dumps(body) if body is not None else None,headers=headers or {})
         response=conn.getresponse();data=response.read();status=response.status;conn.close();return status,json.loads(data)
-    def test_new_version(self):self.assertEqual(self.request('/health')[1]['version'],18)
+    def test_new_version(self):self.assertEqual(self.request('/health')[1]['version'],19)
     def test_desktop_requires_remote_token(self):
         with patch.object(application.bridge,'REMOTE_TOKEN','fixture'):
             self.assertEqual(self.request('/v1/desktop/status')[0],401)

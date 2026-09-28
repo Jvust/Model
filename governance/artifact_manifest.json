@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "project": "Jvust/Model",
+  "release": "0.19-activation-rc1",
+  "source_base_commit": "f163f5cc9e76d7f13cf5f48a373727f16d98b365",
+  "new_remote_commit": "d514a32795654f94f630a6506ed4273384b21588",
+  "pr_number": 27,
+  "archive_status": "drive_archived",
+  "drive_folder_id": "135xpZx-EDvXyjQyyGCLYpogFvKktr8B1",
+  "drive_folder_path": "/Google Drive/Github/01_Model_本地模型与推理/Model_0.19_Activation_20260928",
+  "artifacts": [
+    {
+      "name": "Model-0.19-Activation-Candidate.zip",
+      "kind": "source_candidate_with_verified_legacy_cpu_engine",
+      "drive_file_id": "1Uel7MZdRKgNHuk4qJQpT7X45Gmrwk214",
+      "sha256": "4807e3693517e6d047f1d4c0ec9172d256e20c6aa7cc6174c644ae86a718ce6d",
+      "status": "active"
+    },
+    {
+      "name": "Model-0.19-Changes.zip",
+      "kind": "manifest_verified_overlay",
+      "drive_file_id": "1EOLlAFosFE9qhb8XgBcMOrLIzBD-dxh6",
+      "sha256": "9e0f6b76871686eb04e6f1df0e9418932b5e22210225ad1f7fd40d1f9fd44b45",
+      "status": "active"
+    },
+    {
+      "name": "Model-0.19-Verification.md",
+      "kind": "test_report",
+      "drive_file_id": "14YztA8MqjYnASfh4C6fhFxKlxcW5wMC-",
+      "sha256": "839d372afb7d55e9d4308571d8b8c65366bc8aee6261e24749d83ddc868b6f06",
+      "status": "active"
+    },
+    {
+      "name": "Model-0.19-SHA256.txt",
+      "kind": "external_archive_checksums",
+      "drive_file_id": "1T6c2Mf30-Uz1kQKSwgSAxobZPA5nw-PI",
+      "sha256": "d02b3d1e1e9f17ce5bd670ef2d831ee8801f4990f6e949a36cf47e8c865f413c",
+      "status": "active"
+    }
+  ],
+  "note": "Drive IDs and SHA256 values recorded after successful archive upload. Windows/GPU intended-host evidence remains pending."
+}

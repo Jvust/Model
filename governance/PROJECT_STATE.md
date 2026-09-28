@@ -1,3 +1,18 @@
+# 当前候选状态：Model 0.19（GitHub / Drive 已同步，目标机验收待完成）
+
+Base `f163f5cc9e76d7f13cf5f48a373727f16d98b365`，工作分支 `feat/model-activation-resume-20260928`。
+实现提交：`d514a32795654f94f630a6506ed4273384b21588`；评审 PR：#27。
+
+本轮统一启用、严格权重/分片校验、缓存复用、参数/聊天恢复与逐项批量接续已实现。候选本地验证记录为 312 项 Python 测试、14 项 OAuth fixture、11 项浏览器 DOM/localhost 检查。源码已经推送 GitHub，四个交付物已经归档到 Drive `Github/01_Model_本地模型与推理/Model_0.19_Activation_20260928`。
+
+**仍未完成的最终验收：** Windows 0.19 候选 EXE、用户实际 DriveFS、Y9000P RTX 4060 8GB 上真实 FLUX/Qwen 推理、双机 HTTPS。GitHub Actions 对 PR #27 的当前提交已触发；只有完成后才能把远端 CI 写成 PASS。
+
+详见 `docs/ACTIVATION_AND_RESUME.md`、`docs/EVALUATION_0_19.md`、`governance/artifact_manifest.json` 和 `governance/pending_sync.json`。
+
+---
+
+# 历史0.18状态（保留，不作为0.19验收结论）
+
 # Model Project State
 
 Updated: 2026-09-27

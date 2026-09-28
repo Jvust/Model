@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 CATALOG = {
+    "flux2_klein_4b_diffusers": {"label": "FLUX.2 klein 4B 多参考编辑 (Diffusers)", "kind": "image", "repo": "black-forest-labs/FLUX.2-klein-4B", "root": "image_edit", "ram_gib": 8, "gpu": True, "vram_mb": 7500},
     "got_ocr2": {"label": "GOT-OCR 2.0 (HF)", "kind": "ocr", "repo": "stepfun-ai/GOT-OCR-2.0-hf", "root": "ocr", "ram_gib": 4},
     "chronos_2": {"label": "Chronos-2", "kind": "forecast", "repo": "amazon/chronos-2", "root": "timeseries", "ram_gib": 3},
     "timesfm_2_0_500m": {"label": "TimesFM 2.0 500M", "kind": "forecast", "repo": "google/timesfm-2.0-500m-pytorch", "root": "timeseries", "ram_gib": 8},
@@ -87,6 +88,23 @@ def validate_input(model_id, payload):
         return {"image": payload["image"], "max_new_tokens": integer(payload.get("max_new_tokens", 1024), 1, 4096, "max_new_tokens"), "format": bool(payload.get("format", False))}
     if kind == "forecast":
         return {"values": series_values(payload), "horizon": integer(payload.get("horizon", 24), 1, 256, "horizon"), "frequency": integer(payload.get("frequency", 0), 0, 2, "frequency")}
+    if kind == "image":
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 6000:
+            raise ValueError("Image prompt needs 1..6000 characters")
+        images = payload.get("images", [])
+        if not isinstance(images, list) or len(images) > 3:
+            raise ValueError("Use at most three reference images")
+        if sum(len(image_bytes(item)) for item in images) > 10_000_000:
+            raise ValueError("Combined reference images exceed 10 MB")
+        width = integer(payload.get("width", 704), 256, 1024, "width")
+        height = integer(payload.get("height", 960), 256, 1024, "height")
+        if width % 16 or height % 16:
+            raise ValueError("Image dimensions must be multiples of 16")
+        if integer(payload.get("steps", 4), 1, 80, "steps") != 4:
+            raise ValueError("This distilled FLUX profile uses exactly 4 steps")
+        return {"prompt": prompt.strip(), "images": images, "width": width, "height": height,
+                "steps": 4, "seed": integer(payload.get("seed", 0), 0, 2**32-1, "seed")}
     prompt = str(payload.get("prompt") or "").strip()
     if not prompt or len(prompt) > 6000:
         raise ValueError("Video prompt must contain 1..6000 characters")
@@ -117,6 +135,12 @@ def infer(model_id, model_dir, payload, output_dir):
     model_dir, output_dir = Path(model_dir), Path(output_dir)
     args = validate_input(model_id, payload)
     torch.set_num_threads(max(1, min(8, (os.cpu_count() or 4) - 1)))
+    if model_id == "flux2_klein_4b_diffusers":
+        try:
+            from .flux_edit_worker import run
+        except ImportError:
+            from flux_edit_worker import run
+        return run(model_dir, args, output_dir, load_image)
     if model_id == "got_ocr2":
         from transformers import AutoProcessor, GotOcr2ForConditionalGeneration
         model = GotOcr2ForConditionalGeneration.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False, use_safetensors=True, torch_dtype=torch.float32).eval()

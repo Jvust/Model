@@ -70,7 +70,7 @@
   }
   async function refresh() {
     const body = await request("/v1/native/catalog");
-    catalog = body.models;
+    catalog = body.models.filter(item => item.kind !== "image"); // Multi-image editing uses the unified activation workspace.
     const snapshot = window.DriveModelIndex.loadSnapshot();
     scanned = snapshot ? window.DriveModelIndex.flattenPackages(snapshot.tree, snapshot.registry) : [];
     $("nativeModel").textContent = "";

@@ -1,3 +1,31 @@
+# Model 0.19 · 启用与接续候选版
+
+**这是源码候选包，不是已经完成 Windows / NVIDIA 实机验收的正式安装包。**
+
+本轮建立统一“选择模型 → 检查 → 准备 → 运行 → 逐项保存 → 下次接续”入口；继承0.18的 Drive API / Drive Desktop、缓存、聊天及专用后端。
+
+## 在 Y9000P 上打开
+
+1. 完整解压到 D 盘，例如 `D:\Model-App-0.19`，不要覆盖旧0.18安装目录。
+2. 如果旧 Model 托盘正在运行，先正常退出它。双击根目录 **`Run-Model-0.19.cmd`**。
+3. 启动器把私有 Python / 辅助库放到 `D:\Model`，打开本机网页。**本候选包不要运行旧 `runtime/Install.cmd`**，旧安装入口要求另行构建的新 EXE。
+4. 选择 Drive 来源并扫描 `AI-Model-Vault`；从模型卡片点 **“启用/接续”**。支持且检查通过的模型可以“只准备，下次复用”或“启用并运行”。
+5. 下次使用同一启动器、同一本地缓存，重新连接来源并扫描后，在“历史任务与接续”中继续未完成任务。
+
+关闭窗口会停止本次源代码 Runtime，但不会删除 `D:\Model` 的已完成权重、任务数据库、输入或结果。首次准备辅助运行环境仍需联网；缓存完整后的推理不需要重新下载模型权重。Drive API 模式重新授权仍可能需要联网。
+
+包含历史0.18验证包中的官方 CPU llama.cpp 引擎及许可证；不把旧0.18 `ModelRuntime.exe` 冒充新程序。Windows启动器、构建脚本、真实GPU生成仍待目标机/CI验收。
+
+## 本轮状态
+
+- 代码和测试已经在本次工作目录实现；原有 GitHub工作分支仍在基线提交，**新改动尚未推送到 GitHub，也尚未上传Drive**。
+- 具体已测项、验收边界和缺口见 `docs/ACTIVATION_AND_RESUME.md`、`docs/EVALUATION_0_19.md`。
+- 跨会话接手入口：`docs/HANDOFF.md`、`governance/RELEASE_STATE.json`、`governance/pending_sync.json`。
+
+---
+
+## 历史 0.18 README（保留来源，不代表0.19实测）
+
 # Model — Drive-first AI Runtime
 
 ## 0.18 optional Drive Desktop source

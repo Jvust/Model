@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import secrets
@@ -307,6 +308,7 @@ class RuntimeState:
         self.model: str | None = None
         self.model_relative_path: str | None = None
         self.source_drive_file_id: str | None = None
+        self.source_version: str | None = None
         self.started_at: float | None = None
         self.ready_at: float | None = None
         self.phase = "idle"
@@ -346,6 +348,7 @@ class RuntimeState:
                 "model": self.model,
                 "model_relative_path": self.model_relative_path,
                 "source_drive_file_id": self.source_drive_file_id,
+                "source_version": self.source_version,
                 "started_at": started_at,
                 "ready_at": self.ready_at if running else None,
                 "uptime_seconds": uptime,
@@ -370,6 +373,7 @@ class RuntimeState:
             self.model = None
             self.model_relative_path = None
             self.source_drive_file_id = None
+            self.source_version = None
             self.started_at = None
             self.ready_at = None
             self.phase = "idle"
@@ -403,6 +407,7 @@ class RuntimeState:
             self.model = model_name
             self.model_relative_path = relative_path
             self.source_drive_file_id = spec.file_id
+            self.source_version = hashlib.sha256(json.dumps([spec.file_id, spec.size, spec.md5_checksum, spec.modified_time]).encode()).hexdigest()
             self.phase = "downloading"
             self.downloaded_bytes = 0
             self.download_total_bytes = spec.size

@@ -25,7 +25,7 @@ except ImportError:
 PREFIX = "desktop_"
 FOLDER = "application/vnd.google-apps.folder"
 WEIGHTS = {".gguf", ".safetensors", ".onnx", ".pt", ".pth", ".ckpt", ".bin", ".model", ".tflite"}
-SUPPORT = {".json", ".txt", ".yaml", ".yml", ".tiktoken"}
+SUPPORT = {".json", ".txt", ".yaml", ".yml", ".tiktoken", ".jinja"}
 MAX_METADATA = 16 * 1024**2
 CHUNK = 8 * 1024**2
 RECALL_MASK = 0x1000 | 0x40000 | 0x400000  # OFFLINE / RECALL_ON_OPEN / RECALL_ON_DATA_ACCESS
@@ -405,6 +405,6 @@ class DesktopAwareCache(DriveCache):
             partial.replace(final)
             temporary = metadata.with_suffix(".json.tmp")
             temporary.write_text(json.dumps({"file_id": spec.file_id, "name": spec.name, "size": spec.size,
-                "source": "desktop", "sha256": digest.hexdigest(), "read_only_source": True}, ensure_ascii=False, indent=2), encoding="utf-8")
+                "source": "desktop", "status": "complete", "sha256": digest.hexdigest(), "verified_mtime_ns": final.stat().st_mtime_ns, "read_only_source": True}, ensure_ascii=False, indent=2), encoding="utf-8")
             temporary.replace(metadata)
             return final

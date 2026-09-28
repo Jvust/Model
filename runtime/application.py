@@ -10,17 +10,25 @@ from urllib.parse import parse_qs, urlparse, unquote
 try:
     from . import local_bridge as bridge
     from .native_runtime import NativeRuntime
+    from .activation_runtime import ActivationRuntime
+    from .activation_backends import ActivationBackends
+    from .instance_lock import instance_lock
+    from . import conversation_store
     from .native_worker import CATALOG
     from .desktop_source import DesktopSource, DesktopAwareCache, payload_specs, PREFIX
     from .chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 except ImportError:
     import local_bridge as bridge
     from native_runtime import NativeRuntime
+    from activation_runtime import ActivationRuntime
+    from activation_backends import ActivationBackends
+    from instance_lock import instance_lock
+    import conversation_store
     from native_worker import CATALOG
     from desktop_source import DesktopSource, DesktopAwareCache, payload_specs, PREFIX
     from chat_profiles import ProfiledRuntimeState, load_profile, save_profile
 
-VERSION = 18
+VERSION = 19
 DESKTOP = DesktopSource(bridge.DRIVE_CACHE.root)
 bridge.DRIVE_CACHE = DesktopAwareCache(bridge.DRIVE_CACHE.root, DESKTOP)
 for engine in (bridge.IMAGE, bridge.TASK, bridge.PACKAGE):
@@ -29,6 +37,7 @@ bridge.STATE = ProfiledRuntimeState()
 bridge.ALLOWED_ORIGINS.update({f"http://127.0.0.1:{bridge.BRIDGE_PORT}", f"http://localhost:{bridge.BRIDGE_PORT}"})
 SITE_ROOT = Path(sys._MEIPASS) / "site" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 NATIVE = NativeRuntime(bridge.DRIVE_CACHE, bridge.DRIVE_SESSION.get)
+ACTIVATION = ActivationRuntime(bridge.DRIVE_CACHE.root, ActivationBackends(bridge, NATIVE, DESKTOP), recover=False)
 
 
 def byte_range(header, size):
@@ -50,7 +59,7 @@ def byte_range(header, size):
 
 
 class ApplicationHandler(bridge.Handler):
-    server_version = "DriveModelBridge/0.18"
+    server_version = "DriveModelBridge/0.19-candidate"
 
     def _gate(self):
         if not self._origin_allowed():
@@ -74,7 +83,7 @@ class ApplicationHandler(bridge.Handler):
             return
         self.send_response(status)
         self._cors_headers()
-        self.send_header("Content-Type", {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".webm": "video/webm"}.get(path.suffix.lower(), "application/octet-stream"))
+        self.send_header("Content-Type", {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".webm": "video/webm", ".gif": "image/gif", ".mkv": "video/x-matroska"}.get(path.suffix.lower(), "application/octet-stream"))
         self.send_header("Content-Length", str(max(0, end - start + 1)))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-store")
@@ -117,6 +126,12 @@ class ApplicationHandler(bridge.Handler):
             return
         if path.startswith("/v1/") and not self._gate():
             return
+        if path == "/v1/chat/history":
+            self._json(200, conversation_store.read(ACTIVATION.store, bridge.STATE.snapshot()))
+            return
+        if path.startswith("/v1/activation/"):
+            self._activation_get(path)
+            return
         if path == "/v1/desktop/status":
             self._json(200, DESKTOP.status())
         elif path == "/v1/desktop/snapshot":
@@ -144,12 +159,118 @@ class ApplicationHandler(bridge.Handler):
                 self._json(404, {"error": str(error)})
         elif path == "/v1/runtime":
             state = bridge.STATE.snapshot()
-            state.update(runtime_version=VERSION, drive_api_session=bool(bridge.DRIVE_SESSION.access_token), cache_root_label=bridge.DRIVE_CACHE.root.name, llama_server_found=bridge.resolve_llama_server() is not None, bridge_port=bridge.BRIDGE_PORT, model_server_port=bridge.MODEL_SERVER_PORT, video=bridge.VIDEO.snapshot(), image=bridge.IMAGE.snapshot(), task=bridge.TASK.snapshot(), package=bridge.PACKAGE.snapshot(), native=NATIVE.snapshot(), desktop=DESKTOP.status(), hardware=bridge.runtime_hardware_snapshot(), remote_auth_required=bool(bridge.REMOTE_TOKEN))
+            state.update(runtime_version=VERSION, drive_api_session=bool(bridge.DRIVE_SESSION.access_token), cache_root_label=bridge.DRIVE_CACHE.root.name, llama_server_found=bridge.resolve_llama_server() is not None, bridge_port=bridge.BRIDGE_PORT, model_server_port=bridge.MODEL_SERVER_PORT, video=bridge.VIDEO.snapshot(), image=bridge.IMAGE.snapshot(), task=bridge.TASK.snapshot(), package=bridge.PACKAGE.snapshot(), native=NATIVE.snapshot(), activation=ACTIVATION.snapshot(), desktop=DESKTOP.status(), hardware=bridge.runtime_hardware_snapshot(), remote_auth_required=bool(bridge.REMOTE_TOKEN))
             self._json(200, state)
         else:
             super().do_GET()
 
+    def _activation_get(self, path):
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            if path == "/v1/activation/history":
+                self._json(200, {"jobs": ACTIVATION.store.history()})
+            elif path == "/v1/activation/status":
+                self._json(200, ACTIVATION.snapshot())
+            elif path == "/v1/activation/job":
+                self._json(200, ACTIVATION.store.get(query.get("job_id", [""])[0]))
+            elif path == "/v1/activation/file":
+                result = ACTIVATION.media_path(query.get("job_id", [""])[0], query.get("step", [""])[0], query.get("name", [""])[0])
+                self._serve_video_file(result)
+            else:
+                self._json(404, {"error": "Unknown activation route"})
+        except FileNotFoundError as error:
+            self._json(404, {"error": str(error)})
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            self._json(400, {"error": str(error)})
+
+    def _activation_post(self, path):
+        if not self._gate():
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= length <= 16_000_000:
+                raise ValueError("Activation request exceeds 16 MB")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("JSON object required")
+            allowed = {
+                "/v1/activation/plan": {"selection"},
+                "/v1/activation/start": {"selection", "input", "items", "prepare_only", "accept_variant", "request_key"},
+                "/v1/activation/resume": {"selection", "job_id"},
+                "/v1/activation/stop": set(),
+                "/v1/activation/workspace": {"selection", "value"},
+            }
+            if path not in allowed:
+                self._json(404, {"error": "Unknown activation route"})
+                return
+            if set(body) - allowed[path]:
+                raise ValueError("Unexpected activation request fields")
+            if path.endswith("/plan"):
+                result = ACTIVATION.plan(body.get("selection"))
+            elif path.endswith("/start"):
+                result = ACTIVATION.start(body)
+            elif path.endswith("/resume"):
+                result = ACTIVATION.resume(body)
+            elif path.endswith("/stop"):
+                result = ACTIVATION.stop()
+            else:
+                plan = ACTIVATION.plan(body.get("selection"))
+                if "value" in body:
+                    # Workspaces store settings, not file payloads, handles, or credentials.
+                    value = body["value"]
+                    allowed_settings = {"prompt", "negative_prompt", "width", "height", "steps", "cfg", "seed", "batch_prompts", "horizon", "frequency", "max_new_tokens", "format", "top_n"}
+                    if not isinstance(value, dict) or set(value) - allowed_settings:
+                        raise ValueError("Only prompt and task settings may be saved in the workspace")
+                    ACTIVATION.store.save_workspace(plan["identity"], value)
+                result = {"identity": plan["identity"], "value": ACTIVATION.store.load_workspace(plan["identity"])}
+            self._json(202 if path.endswith(("/start", "/resume")) else 200, result)
+        except PermissionError as error:
+            self._json(401, {"error": str(error)})
+        except FileNotFoundError as error:
+            self._json(404, {"error": str(error)})
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            self._json(400, {"error": str(error)})
+        except RuntimeError as error:
+            self._json(409, {"error": str(error)})
+
     def do_POST(self):
+        path = urlparse(self.path).path
+        if path == "/v1/chat/history":
+            if not self._gate():
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 <= size <= 1_500_000:
+                    raise ValueError("Chat history request is too large")
+                body = json.loads(self.rfile.read(size) or b"{}")
+                if not isinstance(body, dict) or set(body) != {"identity", "messages"}:
+                    raise ValueError("Invalid chat history request")
+                self._json(200, conversation_store.write(ACTIVATION.store, bridge.STATE.snapshot(), body["identity"], body["messages"]))
+            except (TypeError, ValueError, KeyError) as error:
+                self._json(400, {"error": str(error)})
+            return
+        if path.startswith("/v1/activation/"):
+            self._activation_post(path)
+            return
+        exclusive = {
+            "/v1/models/start", "/v1/models/stop", "/v1/models/cache/clear", "/v1/models/cache/delete",
+            "/v1/image/generate", "/v1/image/stop", "/v1/video/generate", "/v1/video/stop",
+            "/v1/packages/materialize", "/v1/packages/stop", "/v1/tasks/start", "/v1/tasks/stop",
+            "/v1/tasks/embeddings", "/v1/tasks/rerank", "/v1/chat/completions", "/v1/native/start",
+            "/v1/native/stop", "/v1/desktop/pick", "/v1/desktop/scan", "/v1/desktop/stop",
+        }
+        if path in exclusive:
+            if not self._gate():
+                return
+            with ACTIVATION.lock:
+                if ACTIVATION.active():
+                    self._json(409, {"error": "统一启用任务正在进行，请使用任务面板取消，不能同时更改来源/清缓存/启动另一个后端"})
+                    return
+                self._do_post_legacy()
+        else:
+            self._do_post_legacy()
+
+    def _do_post_legacy(self):
         path = urlparse(self.path).path
         if path.startswith("/v1/desktop/"):
             if not self._gate():
@@ -231,14 +352,16 @@ class ApplicationHandler(bridge.Handler):
             self._json(500, {"error": str(error)})
 
 
-def main():
+def serve():
     server = ThreadingHTTPServer((bridge.HOST, bridge.BRIDGE_PORT), ApplicationHandler)
-    print(f"Drive Model Runtime 0.18 · {bridge.HOST}:{bridge.BRIDGE_PORT}")
+    ACTIVATION.store.recover()
+    print(f"Drive Model Runtime 0.19 candidate · {bridge.HOST}:{bridge.BRIDGE_PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        ACTIVATION.shutdown()
         DESKTOP.stop()
         NATIVE.stop()
         if NATIVE.thread:
@@ -249,6 +372,11 @@ def main():
         bridge.VIDEO.shutdown()
         bridge.STATE.stop()
         server.server_close()
+
+
+def main():
+    with instance_lock(bridge.DRIVE_CACHE.root):
+        serve()
 
 
 if __name__ == "__main__":

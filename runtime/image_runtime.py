@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -14,11 +15,17 @@ from typing import Callable
 
 try:
     from .drive_cache import DriveCache, DriveFileSpec, default_cache_root
-    from .hardware import managed_comfy_preflight
+    from .hardware import managed_comfy_preflight, system_memory_status
+    from .qwen_edit_workflow import QWEN_EDIT_ADAPTER, build_qwen_edit
+    from .package_integrity import safe_relative
+    from .native_worker import image_bytes
     from .video_runtime import COMFY_BASE, json_request
 except ImportError:
     from drive_cache import DriveCache, DriveFileSpec, default_cache_root
-    from hardware import managed_comfy_preflight
+    from hardware import managed_comfy_preflight, system_memory_status
+    from qwen_edit_workflow import QWEN_EDIT_ADAPTER, build_qwen_edit
+    from package_integrity import safe_relative
+    from native_worker import image_bytes
     from video_runtime import COMFY_BASE, json_request
 
 
@@ -37,10 +44,33 @@ FLUX2_KLEIN_FP8 = "flux-2-klein-4b-fp8.safetensors"
 FLUX2_TEXT_ENCODER = "qwen_3_4b.safetensors"
 FLUX2_VAE = "flux2-vae.safetensors"
 
-COMFY_GGUF_ARCHIVE_URL = (
-    "https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip"
-)
-COMFY_GGUF_ARCHIVE_NAME = "ComfyUI-GGUF-main.zip"
+COMFY_GGUF_COMMIT = "6ea2651e7df66d7585f6ffee804b20e92fb38b8a"
+COMFY_GGUF_ARCHIVE_URL = f"https://github.com/city96/ComfyUI-GGUF/archive/{COMFY_GGUF_COMMIT}.zip"
+COMFY_GGUF_ARCHIVE_NAME = f"ComfyUI-GGUF-{COMFY_GGUF_COMMIT}.zip"
+
+
+def extract_node_archive(archive: Path, destination: Path) -> None:
+    """Extract only a bounded source ZIP; never honor traversal or symlinks."""
+    with zipfile.ZipFile(archive) as zf:
+        infos = zf.infolist()
+        if len(infos) > 4096 or sum(i.file_size for i in infos) > 256 * 1024**2:
+            raise ValueError("ComfyUI node archive is unexpectedly large")
+        seen = set()
+        for info in infos:
+            relative = info.filename.rstrip("/")
+            safe_relative(relative)
+            if relative.casefold() in seen or stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError("Duplicate/symlink member in ComfyUI node archive")
+            seen.add(relative.casefold())
+        for info in infos:
+            target = destination / info.filename
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, target.open("xb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024**2)
+
 
 ADAPTERS = {
     "pony_diffusion_v6_xl": {
@@ -188,6 +218,8 @@ ADAPTERS = {
 }
 
 
+ADAPTERS["qwen_image_edit_2511_gguf"] = QWEN_EDIT_ADAPTER
+
 def adapter_for(name: str, model_id: str = "", package_path: str = "") -> tuple[str, dict] | None:
     hay = f"{model_id} {name} {package_path}".strip().lower()
     for key, adapter in ADAPTERS.items():
@@ -198,11 +230,17 @@ def adapter_for(name: str, model_id: str = "", package_path: str = "") -> tuple[
 
 def managed_comfy_hardware(adapter: dict | None = None) -> dict:
     adapter = adapter or {}
-    return managed_comfy_preflight(
+    result = managed_comfy_preflight(
         IMAGE_ROOT,
         min_vram_mb=int(adapter.get("min_vram_mb") or 0),
         min_disk_free_gb=float(adapter.get("min_disk_free_gb") or 10.0),
     )
+
+    if adapter.get("min_ram_gib"):
+        memory = system_memory_status()
+        if (memory.get("available_bytes") or 0) < adapter["min_ram_gib"] * 1024**3:
+            result.update(supported=False, detail=f"该量化方案需要至少 {adapter['min_ram_gib']} GiB 可用系统 RAM；不能以虚拟内存代替")
+    return result
 
 
 def _normalize_file_payload(item: dict) -> dict:
@@ -294,6 +332,8 @@ def _bounded_float(payload: dict, key: str, default: float, minimum: float, maxi
 
 
 def build_prompt(model_files, payload: dict, adapter: dict, job_id: str) -> dict:
+    if adapter.get("workflow_kind") == "qwen_image_edit_2511":
+        return build_qwen_edit(model_files, payload, job_id)
     prompt = str(payload.get("prompt") or "").strip()
     if not prompt:
         raise ValueError("请先填写图像提示词。")
@@ -536,6 +576,22 @@ def build_prompt(model_files, payload: dict, adapter: dict, job_id: str) -> dict
     }
 
 
+def validate_image_uploads(payload):
+    values = payload.get("images") or ([payload["image"]] if payload.get("image") else [])
+    if not isinstance(values, list) or not 1 <= len(values) <= 3:
+        raise ValueError("Qwen 图像编辑需要上传 1–3 张图片")
+    images = []
+    for value in values:
+        raw = image_bytes(value)
+        suffix = "png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "jpg" if raw.startswith(b"\xff\xd8\xff") else "webp" if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP" else None
+        if suffix is None:
+            raise ValueError("Only PNG/JPEG/WebP image bytes are supported")
+        images.append((raw, suffix))
+    if sum(len(raw) for raw, _ in images) > 10_000_000:
+        raise ValueError("Combined reference images exceed 10 MB")
+    return images
+
+
 class ImageRuntime:
     def __init__(
         self,
@@ -623,7 +679,7 @@ class ImageRuntime:
                 ],
             }
 
-    def start(self, payload: dict) -> dict:
+    def start(self, payload: dict, trusted_artifacts=None) -> dict:
         name = str(payload.get("name") or payload.get("model_name") or "")
         model_id = str(payload.get("model_id") or "")
         package_path = str(payload.get("package_path") or "")
@@ -640,8 +696,13 @@ class ImageRuntime:
         if self.comfy.snapshot().get("running"):
             raise RuntimeError("已有视频任务正在使用 ComfyUI，请先等待或停止视频任务。")
 
-        self.drive_cache.access_token(payload, self.token_provider)
-        checkpoint_spec(payload, adapter)
+        if trusted_artifacts is None:
+            self.drive_cache.access_token(payload, self.token_provider)
+            checkpoint_spec(payload, adapter)
+        elif adapter_key != "qwen_image_edit_2511_gguf":
+            raise ValueError("Runtime variants are not supported by this adapter")
+        if adapter.get("workflow_kind") == "qwen_image_edit_2511":
+            validate_image_uploads(payload)
 
         with self.lock:
             if self.job_thread and self.job_thread.is_alive():
@@ -658,7 +719,7 @@ class ImageRuntime:
 
         thread = threading.Thread(
             target=self._run_job,
-            args=(job_id, adapter_key, dict(payload)),
+            args=(job_id, adapter_key, dict(payload), trusted_artifacts),
             daemon=True,
         )
         with self.lock:
@@ -720,7 +781,7 @@ class ImageRuntime:
             )
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
-                if destination.stat().st_size == cached.stat().st_size:
+                if not destination.is_symlink() and os.path.samefile(destination, cached):
                     continue
                 destination.unlink()
             try:
@@ -754,8 +815,7 @@ class ImageRuntime:
 
             extract_root = download_root / ("gguf-node-" + uuid.uuid4().hex)
             extract_root.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(archive, "r") as zf:
-                zf.extractall(extract_root)
+            extract_node_archive(archive, extract_root)
             candidates = [
                 path
                 for path in extract_root.iterdir()
@@ -769,6 +829,7 @@ class ImageRuntime:
             shutil.move(str(candidates[0]), str(target))
             shutil.rmtree(extract_root, ignore_errors=True)
             archive.unlink(missing_ok=True)
+            (target / ".jvust_source_revision").write_text(COMFY_GGUF_COMMIT, encoding="utf-8")
             installed_new = True
 
         if not marker.exists():
@@ -781,6 +842,18 @@ class ImageRuntime:
                 "install",
                 "--disable-pip-version-check",
             ]
+            # Preserve the portable engine's installed torch/torchvision pair.
+            # Metadata-only probe: this does not initialize CUDA or modify global Python.
+            probe = subprocess.run(
+                [str(python), "-s", "-c", "import importlib.metadata as m; print('torch=='+m.version('torch')); print('torchvision=='+m.version('torchvision'))"],
+                cwd=str(comfy_root), capture_output=True, text=True, timeout=30, check=False,
+            )
+            lines = probe.stdout.strip().splitlines()
+            if probe.returncode or len(lines) != 2 or not lines[0].startswith("torch==") or not lines[1].startswith("torchvision=="):
+                raise RuntimeError("Cannot verify ComfyUI PyTorch pair; refusing unbounded dependency installation")
+            constraints = target / ".jvust_torch_constraints.txt"
+            constraints.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            command.extend(["--constraint", str(constraints)])
             if requirements.exists():
                 command.extend(["-r", str(requirements)])
             else:
@@ -864,38 +937,22 @@ class ImageRuntime:
         return data.get(prompt_id) or None
 
     def _resolve_image(self, comfy_root: Path, entry: dict, started: float) -> Path:
-        outputs = entry.get("outputs") or {}
-        for node in outputs.values():
+        root = (comfy_root / "ComfyUI" / "output").resolve()
+        for node in (entry.get("outputs") or {}).values():
             if not isinstance(node, dict):
                 continue
             for image in node.get("images") or []:
-                if not isinstance(image, dict) or not image.get("filename"):
+                if not isinstance(image, dict) or image.get("type", "output") != "output":
                     continue
-                filename = str(image["filename"])
-                subfolder = str(image.get("subfolder") or "")
-                folder_type = str(image.get("type") or "output")
-                base = (
-                    comfy_root
-                    / "ComfyUI"
-                    / ("output" if folder_type == "output" else folder_type)
-                )
-                candidate = (base / subfolder / filename).resolve()
-                if candidate.exists() and candidate.is_file():
+                filename, subfolder = str(image.get("filename") or ""), str(image.get("subfolder") or "")
+                if not filename or Path(filename).name != filename or "\\" in filename or "\\" in subfolder:
+                    raise ValueError("Invalid backend output path")
+                candidate = root / subfolder / filename
+                if candidate.is_symlink() or not candidate.resolve().is_relative_to(root):
+                    raise ValueError("Backend output escapes its output directory")
+                if candidate.is_file() and candidate.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                     return candidate
-
-        output_dir = comfy_root / "ComfyUI" / "output"
-        candidates: list[Path] = []
-        if output_dir.exists():
-            for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                candidates.extend(output_dir.rglob(ext))
-        candidates = [
-            path
-            for path in candidates
-            if path.is_file() and path.stat().st_mtime >= started - 5
-        ]
-        if not candidates:
-            raise RuntimeError("ComfyUI 已完成，但没有找到生成的图像文件。")
-        return max(candidates, key=lambda path: path.stat().st_mtime)
+        raise RuntimeError("本任务的 ComfyUI history 没有图像结果；不会拿其他任务的最近图片冒充")
 
     def _wait_for_result(self, comfy_root: Path, prompt_id: str, started: float) -> Path:
         deadline = time.time() + IMAGE_TIMEOUT_SECONDS
@@ -917,39 +974,67 @@ class ImageRuntime:
             time.sleep(1.5)
         raise RuntimeError("图像生成超时。")
 
-    def _run_job(self, job_id: str, adapter_key: str, payload: dict) -> None:
-        try:
-            adapter = ADAPTERS[adapter_key]
+    def prepare(self, payload, cancel=None, trusted_artifacts=None):
+        matched = adapter_for(str(payload.get("name", "")), str(payload.get("model_id", "")), str(payload.get("package_path", "")))
+        if not matched:
+            raise ValueError("Unknown image adapter")
+        adapter_key, adapter = matched
+        if cancel is not None:
+            self.cancel = cancel
+            self.comfy.cancel = cancel
+        self._set_phase("preparing_comfyui", "正在准备可复用 ComfyUI 环境")
+        portable, python, _ = self.comfy._ensure_comfyui()
+        installed_names = {}
+        if trusted_artifacts is None:
             specs = artifact_specs(payload, adapter)
             token = self.drive_cache.access_token(payload, self.token_provider)
-
-            self._set_phase("preparing_comfyui", "正在准备 managed ComfyUI")
-            portable, python, _ = self.comfy._ensure_comfyui()
-
-            installed_names = {}
             for role, spec in specs.items():
-                requirement = (adapter.get("artifacts") or {}).get(role) or {}
-                installed_names[role] = self._install_artifact(
-                    portable,
-                    spec,
-                    token,
-                    requirement.get("directories") or (),
-                )
+                installed_names[role] = self._install_artifact(portable, spec, token, adapter["artifacts"][role]["directories"])
+        else:
+            # This argument is supplied by the curated RuntimeVariants cache, never an HTTP field.
+            for role, requirement in adapter["artifacts"].items():
+                source = Path(trusted_artifacts[role]).resolve(strict=True)
+                approved = (self.drive_cache.root / "runtime-variants").resolve()
+                if not source.is_relative_to(approved) or not source.is_file() or source.name != requirement["name"]:
+                    raise ValueError("Invalid internally prepared runtime artifact")
+                for category in requirement["directories"]:
+                    target = portable / "ComfyUI" / "models" / category / source.name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists() and not os.path.samefile(target, source):
+                        target.unlink()
+                    if not target.exists():
+                        os.link(source, target)
+                installed_names[role] = source.name
+        if adapter.get("requires_comfy_gguf") and self._ensure_comfy_gguf(portable, python):
+            process = self.comfy.process
+            if process and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+                self.comfy.process = None
+        self.comfy._ensure_comfyui_server()
+        self._verify_required_nodes(adapter)
+        if self.cancel.is_set():
+            raise InterruptedError("Preparation cancelled")
+        return portable, installed_names
 
-            if adapter.get("requires_comfy_gguf"):
-                installed_new = self._ensure_comfy_gguf(portable, python)
-                if installed_new:
-                    process = self.comfy.process
-                    if process and process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                        self.comfy.process = None
+    def _write_inputs(self, portable, payload, job_id):
+        images = validate_image_uploads(payload)
+        folder = portable / "ComfyUI" / "input"
+        folder.mkdir(parents=True, exist_ok=True)
+        names = []
+        for i, (raw, suffix) in enumerate(images):
+            name = f"model_{job_id}_{i}.{suffix}"
+            (folder / name).write_bytes(raw)
+            names.append(name)
+        return names
 
-            self.comfy._ensure_comfyui_server()
-            self._verify_required_nodes(adapter)
+    def _run_job(self, job_id: str, adapter_key: str, payload: dict, trusted_artifacts=None) -> None:
+        try:
+            adapter = ADAPTERS[adapter_key]
+            portable, installed_names = self.prepare(payload, self.cancel, trusted_artifacts)
+            if adapter.get("workflow_kind") == "qwen_image_edit_2511":
+                payload = dict(payload)
+                payload["_image_names"] = self._write_inputs(portable, payload, job_id)
 
             workflow_kind = adapter.get("workflow_kind")
             label = {

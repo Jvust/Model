@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 LOCK = threading.Lock()
 PACKAGES = {
+    "flux2_klein_4b_diffusers": ["diffusers==0.40.0", "transformers==5.17.0", "accelerate==1.15.0", "huggingface_hub==1.33.0", "safetensors==0.8.0", "Pillow==12.3.0", "numpy==1.26.4", "psutil==7.0.0"],
     "got_ocr2": ["transformers==4.57.6", "accelerate==1.10.1", "Pillow==11.3.0", "numpy==1.26.4"],
     "chronos_2": ["chronos-forecasting==2.2.1", "transformers==4.57.6", "accelerate==1.10.1", "pandas==2.2.3", "numpy==1.26.4"],
     "timesfm_2_0_500m": ["timesfm[torch]==1.3.0", "numpy==1.26.4", "pandas==2.2.3"],
@@ -82,8 +83,8 @@ def run_checked(command, cancel, log_path, timeout=1800, env=None):
 
 def ensure_environment(root, model_id, cancel, progress=lambda text: None):
     packages = PACKAGES[model_id]
-    gpu = model_id.startswith("wan22_")
-    spec = {"packages": packages, "torch": "2.7.1", "torchvision": "0.22.1", "gpu": gpu, "python": "3.11.9"}
+    gpu = model_id.startswith("wan22_") or model_id == "flux2_klein_4b_diffusers"
+    spec = {"packages": packages, "torch": "2.7.1", "torchvision": "0.22.1", "gpu": gpu, "python": "3.11.9", "environment_contract": 2}
     key = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
     destination = Path(root) / "environments" / key
     destination.mkdir(parents=True, exist_ok=True)
@@ -128,8 +129,14 @@ def ensure_environment(root, model_id, cancel, progress=lambda text: None):
         progress("Installing pinned inference dependencies (reused on later runs)")
         index = "https://download.pytorch.org/whl/" + ("cu126" if gpu else "cpu")
         run_checked([str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", "torch==2.7.1", "torchvision==0.22.1", "--index-url", index], cancel, log)
-        run_checked([str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", *packages], cancel, log)
+        constraints = destination / "constraints.txt"
+        constraints.write_text("torch==2.7.1\ntorchvision==0.22.1\n", encoding="utf-8")
+        run_checked([str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", "--constraint", str(constraints), *packages], cancel, log)
         run_checked([str(interpreter), "-m", "pip", "check"], cancel, log)
+        smoke = "import torch, torchvision; from torchvision.ops import nms; nms(torch.tensor([[0.,0.,1.,1.]]), torch.tensor([1.]), 0.5)"
+        if model_id == "flux2_klein_4b_diffusers":
+            smoke += "; from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel, AutoencoderKLFlux2; from transformers import Qwen3ForCausalLM"
+        run_checked([str(interpreter), "-c", smoke], cancel, log, timeout=120)
         check_cancel(cancel)
         marker.write_text(json.dumps(spec, indent=2), encoding="utf-8")
         return interpreter
