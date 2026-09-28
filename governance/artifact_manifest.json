@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "project": "Jvust/Model",
+  "release": "0.19-activation-rc1",
+  "source_base_commit": "f163f5cc9e76d7f13cf5f48a373727f16d98b365",
+  "new_remote_commit": null,
+  "archive_status": "local_conversation_exports_only",
+  "drive_file_ids": [],
+  "artifacts": [
+    {
+      "name": "Model-0.19-Activation-Candidate.zip",
+      "kind": "source_candidate_with_verified_legacy_cpu_engine",
+      "new_windows_exe": false
+    },
+    {
+      "name": "Model-0.19-Changes.zip",
+      "kind": "manifest_verified_overlay"
+    },
+    {
+      "name": "Model-0.19-Verification.md",
+      "kind": "test_report"
+    },
+    {
+      "name": "Model-0.19-SHA256.txt",
+      "kind": "external_archive_checksums"
+    }
+  ],
+  "note": "Final archive SHA256 values are in the external checksum file, avoiding self-referential ZIP hashes. See pending_sync.json."
+}

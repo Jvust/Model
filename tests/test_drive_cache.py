@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import tempfile
 import unittest
@@ -40,7 +41,7 @@ class DriveCacheTests(unittest.TestCase):
                 file_id="1AbCdEfGhIjKlMnOp",
                 name="model.gguf",
                 size=len(body),
-                md5_checksum="abc",
+                md5_checksum=hashlib.md5(body).hexdigest(),
                 resource_key="rk",
             )
 

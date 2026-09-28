@@ -1,3 +1,13 @@
+# 0.19补充：统一启用与接续
+
+已实现统一入口、持久任务/参数/历史、索引逐分片校验、版本绑定缓存、Qwen2511显式GGUF副本、FLUX4B分阶段工作器。
+最终定义仍为：特定模型+版本+后端+目标硬件有真实运行结果；未知模型/硬件不满足时准确说明缺口，而不是虚假绿色。
+当前候选和未验收项以 docs/ACTIVATION_AND_RESUME.md、governance/RELEASE_STATE.json、governance/pending_sync.json为准。
+
+---
+
+# 历史启用计划（保留）
+
 # 模型启用计划
 
 ## 目标

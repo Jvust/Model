@@ -14,11 +14,13 @@ from pathlib import Path
 try:
     from .native_worker import CATALOG, validate_input
     from .package_runtime import normalize_manifest
+    from .package_integrity import verify_directory, check_index_manifest, read_json
     from .hardware import disk_status, system_memory_status, nvidia_status
     from .managed_env import ensure_environment, check_cancel
 except ImportError:
     from native_worker import CATALOG, validate_input
     from package_runtime import normalize_manifest
+    from package_integrity import verify_directory, check_index_manifest, read_json
     from hardware import disk_status, system_memory_status, nvidia_status
     from managed_env import ensure_environment, check_cancel
 
@@ -43,6 +45,12 @@ def validate_manifest(model_id, payload):
         required |= {"preprocessor_config.json", "tokenizer.json"}
     elif model_id == "timesfm_2_0_500m":
         required = {"torch_model.ckpt"}
+    elif model_id == "flux2_klein_4b_diffusers":
+        required = {"model_index.json", "transformer/config.json", "text_encoder/config.json",
+                    "vae/config.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer_config.json"}
+        for component in ("transformer", "text_encoder", "vae"):
+            if not any(path.startswith(component + "/") and path.endswith(".safetensors") for path in paths):
+                raise ValueError(f"Missing {component} safetensors")
     elif model_id.startswith("wan22_"):
         required = {"model_index.json", "transformer/config.json", "transformer_2/config.json", "text_encoder/config.json", "vae/config.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer_config.json"}
         for component in ("transformer", "transformer_2", "text_encoder", "vae"):
@@ -60,16 +68,20 @@ def validate_manifest(model_id, payload):
 
 def verify_package(model_id, directory):
     root = Path(directory).resolve()
-    for index in root.rglob("*.index.json"):
-        config = json.loads(index.read_text(encoding="utf-8"))
-        for name in set(config.get("weight_map", {}).values()):
-            target = (index.parent / name).resolve()
-            if not target.is_relative_to(root) or not target.is_file():
-                raise ValueError("Missing or unsafe model shard: " + name)
+    verify_directory(root)
     if model_id == "got_ocr2":
         config = json.loads((root / "config.json").read_text(encoding="utf-8"))
         if config.get("model_type") != "got_ocr2":
             raise ValueError("GOT-OCR needs the native HF package, not the legacy custom-code checkpoint")
+    if model_id == "flux2_klein_4b_diffusers":
+        index = read_json(root / "model_index.json")
+        config = read_json(root / "transformer" / "config.json")
+        if index.get("_class_name") != "Flux2KleinPipeline" or index.get("is_distilled") is not True:
+            raise ValueError("Wrong pipeline for FLUX.2 klein")
+        # Do not label a 9B or non-distilled package as the curated 4B profile.
+        te = read_json(root / "text_encoder" / "config.json")
+        if te.get("hidden_size") != 2560 or config.get("guidance_embeds", False):
+            raise ValueError("This adapter requires distilled FLUX.2 klein 4B and its Qwen3-4B encoder")
     if model_id.startswith("wan22_"):
         config = json.loads((root / "model_index.json").read_text(encoding="utf-8"))
         expected = "WanImageToVideoPipeline" if model_id == "wan22_i2v_a14b" else "WanPipeline"
@@ -111,13 +123,17 @@ class NativeRuntime:
             reasons.append(f"At least {info['ram_gib']} GiB available RAM is required")
         if info.get("gpu"):
             gpu = nvidia_status()
-            if not gpu.get("detected") or int(gpu.get("vram_total_mb") or 0) < 16 * 1024:
-                reasons.append("Wan A14B offload requires NVIDIA CUDA with at least 16 GiB VRAM; use a suitable remote Runtime")
+            vram = int(gpu.get("vram_total_mb") or 0)
+            if not gpu.get("detected") or vram < info.get("vram_mb", 16 * 1024):
+                reasons.append("NVIDIA CUDA 显存不足，请使用更小运行副本或远程 Runtime")
+            if model_id == "flux2_klein_4b_diffusers" and vram < 12 * 1024 and (available is None or available < 24 * 1024**3):
+                reasons.append("8GB 显存的 FLUX 分阶段模式需要至少 24 GiB 当前可用系统 RAM")
         remaining = 0
         for item in files:
             spec = item["spec"]
             if not self.cache.cached_path(spec):
-                partial = self.cache.describe(spec).get("partial_bytes") or 0
+                description = self.cache.describe(spec)
+                partial = max(description.get("partial_bytes") or 0, description.get("candidate_bytes") or 0)
                 remaining += max(0, int(spec.size) - int(partial))
         disk = disk_status(self.root)
         # Dependencies and temporary outputs require headroom even for cached weights.
@@ -165,34 +181,57 @@ class NativeRuntime:
             raise ValueError("Symlink package roots are not allowed")
         return root
 
+    def prepare(self, payload, cancel, progress=lambda message: None):
+        model_id = str(payload.get("model_id") or "")
+        plan = self.plan(payload)
+        if not plan["ready"]:
+            raise ValueError("; ".join(plan["reasons"]))
+        _, files = validate_manifest(model_id, payload)
+        token = self.cache.access_token(payload, self.token_provider)
+        self.cancel = cancel
+        directory, interpreter = self._prepare_files(model_id, files, token, progress)
+        return {"directory": str(directory), "interpreter": str(interpreter)}
+
+    def _prepare_files(self, model_id, files, token, progress):
+        directory = self._materialize(model_id, files)
+        # Fail before large transfers if the index names absent source shards.
+        paths = {item["relative_path"] for item in files}
+        for item in files:
+            if item["relative_path"].endswith(".index.json"):
+                spec = item["spec"]
+                cached = self.cache.cached_path(spec) or self.cache.download(spec, token,
+                    lambda received, total: check_cancel(self.cancel))
+                check_index_manifest(item["relative_path"], read_json(cached), paths)
+        # Configs first, then weights. Preserve directory layout and cache identity.
+        for number, item in enumerate(sorted(files, key=lambda item: not item["relative_path"].endswith(".json")), 1):
+            progress(f"准备权重 {number}/{len(files)} {item['relative_path']}")
+            spec = item["spec"]
+            cached = self.cache.cached_path(spec)
+            if cached is None:
+                def download_progress(received, total):
+                    check_cancel(self.cancel)
+                    with self.lock:
+                        self.state.update(file_bytes=received, file_total_bytes=total)
+                cached = self.cache.download(spec, token, download_progress)
+            target = directory.joinpath(*item["relative_path"].split("/"))
+            if not target.resolve().is_relative_to(directory.resolve()):
+                raise ValueError("Package path escapes destination")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                if target.is_symlink() or not os.path.samefile(cached, target):
+                    raise ValueError("Cached package identity changed unexpectedly")
+            else:
+                os.link(cached, target)  # Same cache volume, no duplicate multi-GB copies.
+        token = None
+        verify_package(model_id, directory)
+        interpreter = ensure_environment(self.root, model_id, self.cancel, progress)
+        return directory, interpreter
+
     def _run(self, job_id, model_id, package, files, task_input, token):
         output = self.root / "jobs" / job_id
         output.mkdir(parents=True, exist_ok=True)
         try:
-            directory = self._materialize(model_id, files)
-            # Configs first, then weights. Preserve directory layout and cache identity.
-            for number, item in enumerate(sorted(files, key=lambda item: not item["relative_path"].endswith(".json")), 1):
-                self.phase("downloading", f"{number}/{len(files)} {item['relative_path']}")
-                spec = item["spec"]
-                cached = self.cache.cached_path(spec)
-                if cached is None:
-                    def progress(received, total):
-                        check_cancel(self.cancel)
-                        with self.lock:
-                            self.state.update(file_bytes=received, file_total_bytes=total)
-                    cached = self.cache.download(spec, token, progress)
-                target = directory.joinpath(*item["relative_path"].split("/"))
-                if not target.resolve().is_relative_to(directory.resolve()):
-                    raise ValueError("Package path escapes destination")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists():
-                    if target.is_symlink() or not os.path.samefile(cached, target):
-                        raise ValueError("Cached package identity changed unexpectedly")
-                else:
-                    os.link(cached, target)  # Same cache volume, no duplicate multi-GB copies.
-            token = None
-            verify_package(model_id, directory)
-            interpreter = ensure_environment(self.root, model_id, self.cancel, lambda text: self.phase("preparing_environment", text))
+            directory, interpreter = self._prepare_files(model_id, files, token, lambda text: self.phase("preparing", text))
             self.phase("running", CATALOG[model_id]["label"])
             worker = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "native_worker.py"
             if not worker.is_file():
@@ -236,7 +275,15 @@ class NativeRuntime:
     def result_path(self, job_id, media=False):
         if not isinstance(job_id, str) or len(job_id) != 32 or any(char not in "0123456789abcdef" for char in job_id):
             raise ValueError("Invalid job ID")
-        path = self.root / "jobs" / job_id / ("video.mp4" if media else "result.json")
+        path = self.root / "jobs" / job_id / ("result.json")
         if not path.resolve().is_relative_to(self.root.resolve()) or not path.is_file():
             raise FileNotFoundError("Result does not exist")
+        if media:
+            metadata = read_json(path)
+            filename = metadata.get("file")
+            if filename not in {"video.mp4", "image.png"}:
+                raise FileNotFoundError("No media output")
+            path = path.parent / filename
+            if path.is_symlink() or not path.is_file():
+                raise FileNotFoundError("Media output missing")
         return path

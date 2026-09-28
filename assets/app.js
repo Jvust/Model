@@ -15,6 +15,7 @@
   let runtimeReconnectTimer = null;
   let chatBusy = false;
   let chatHistory = [];
+  let chatIdentity = null, chatRestoreKey = null, chatRestoring = false;
   let selectedVideoModel = null;
   let videoPollTimer = null;
 
@@ -240,8 +241,8 @@
 
   function updateChatAvailability() {
     const ready = !!(runtimeState && runtimeState.ready);
-    $("chatInput").disabled = !ready || chatBusy;
-    $("sendBtn").disabled = !ready || chatBusy;
+    $("chatInput").disabled = !ready || chatBusy || chatRestoring;
+    $("sendBtn").disabled = !ready || chatBusy || chatRestoring;
     $("chatModelLabel").textContent = ready
       ? "当前模型 · " + (runtimeState.model || "GGUF")
       : runtimeState && runtimeState.phase === "loading"
@@ -255,6 +256,7 @@
       const response = await runtimeFetch("/v1/runtime", { cache: "no-store" });
       if (!response.ok) throw new Error("HTTP " + response.status);
       runtimeState = await response.json();
+      await restoreChatForRuntime();
       try {
         const backendResponse = await runtimeFetch("/v1/backends", { cache: "no-store" });
         backendState = backendResponse.ok ? await backendResponse.json() : null;
@@ -548,6 +550,32 @@
     }
   }
 
+  async function restoreChatForRuntime() {
+    if (!runtimeState?.ready || chatBusy) return;
+    const key = JSON.stringify([runtimeBase, modelSource, runtimeState.source_drive_file_id, runtimeState.source_version, runtimeState.cache_file]);
+    if (key === chatRestoreKey) return;
+    chatRestoreKey = key; chatRestoring = true;
+    try {
+      const response = await runtimeFetch("/v1/chat/history", {cache: "no-store"});
+      if (!response.ok) { chatRestoreKey = null; return; } // Older Runtime remains usable.
+      const saved = await response.json();
+      if (chatRestoreKey !== key) return;
+      chatIdentity = saved.identity;
+      chatHistory = saved.messages || [];
+      renderChat();
+    } catch (_) { chatRestoreKey = null; }
+    finally { chatRestoring = false; }
+  }
+
+  async function persistChat() {
+    if (!chatIdentity) return;
+    const response = await runtimeFetch("/v1/chat/history", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({identity: chatIdentity, messages: chatHistory})
+    });
+    if (!response.ok) throw new Error("对话尚未持久保存，请勿关闭窗口");
+  }
+
   function renderChat() {
     const target = $("chatMessages");
     target.textContent = "";
@@ -580,15 +608,22 @@
 
   function clearChat() {
     chatHistory = [];
+    chatIdentity = null; chatRestoreKey = null;
     renderChat();
     showError("");
+  }
+
+  async function clearSavedChat() {
+    chatHistory = [];
+    renderChat();
+    try { await persistChat(); showError(""); } catch (error) { showError(error); }
   }
 
   async function sendChat() {
     const input = $("chatInput");
     const content = input.value.trim();
 
-    if (!content || chatBusy) return;
+    if (!content || chatBusy || chatRestoring) return;
     if (!runtimeState || !runtimeState.ready) {
       showError("请先启动并等待本机 GGUF 模型就绪。");
       return;
@@ -604,6 +639,7 @@
     showError("");
 
     try {
+      await persistChat();
       const response = await runtimeFetch("/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -633,7 +669,8 @@
         content: String(contentOut)
       });
       renderChat();
-      setStatus("本机模型回复完成");
+      await persistChat();
+      setStatus("本机模型回复完成；对话已在本机保存");
     } catch (error) {
       showError(error);
       setStatus("本机模型生成失败");
@@ -1344,6 +1381,7 @@
   }
 
   function renderModels() {
+    queueMicrotask(() => window.dispatchEvent(new Event("model-library-rendered")));
     const list = $("modelList");
     const count = $("modelCount");
 
@@ -1515,6 +1553,14 @@
 
       const actions = document.createElement("div");
       actions.className = "model-actions";
+
+      const activate = document.createElement("button");
+      activate.type = "button";
+      activate.className = "primary";
+      activate.textContent = "启用 / 接续";
+      activate.disabled = Boolean(model.vaultMissing);
+      activate.addEventListener("click", () => window.dispatchEvent(new CustomEvent("model-activate-selection", {detail: model})));
+      actions.appendChild(activate);
 
       const representative = model.representativeFile;
       if (representative && representative.id && Number(representative.size || 0)) {
@@ -1918,6 +1964,8 @@
     runtimeBase: () => runtimeBase || window.MODEL_CONFIG.runtimeBase,
     runtimeFetch,
     runtimeHeaders,
+    models: () => models.slice(),
+    refreshRuntime,
     source: () => modelSource,
     useModelSource,
     acceptDesktopSnapshot,
@@ -2033,7 +2081,7 @@
   $("videoCloseBtn").addEventListener("click", closeVideoWorkspace);
 
   $("stopBtn").addEventListener("click", stopModel);
-  $("clearChatBtn").addEventListener("click", clearChat);
+  $("clearChatBtn").addEventListener("click", clearSavedChat);
 
   $("chatForm").addEventListener("submit", event => {
     event.preventDefault();

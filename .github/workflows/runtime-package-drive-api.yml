@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/runtime-package-main]
   pull_request:
-    branches: [main]
+    branches: [main, feat/model-release-v017-20260927]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,111 +13,64 @@ concurrency:
 jobs:
   package:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Test all source contracts including desktop source
+          python-version: '3.11'
+      - name: Source contracts, persistent activation and cache recovery
         run: python -m unittest discover -s tests -v
-      - name: Test OAuth account isolation with mocked provider
-        run: node tests/test_oauth_sessions.mjs
-      - name: Bundle checksum-verified official CPU llama.cpp
+      - name: OAuth isolation and model classification
+        run: |
+          node tests/test_oauth_sessions.mjs
+          node tests/test_model_index.js
+          node tests/test_model_capabilities.js
+      - name: Checksum-verified official CPU engine
         run: python -m tools.prepare_llama
-      - name: Build standalone Runtime with matching embedded website
+      - name: Build and smoke-test candidate EXE with matching worker files
+        shell: powershell
+        run: ./tools/build_candidate.ps1
+      - name: Parse launchers and validate installation without starting models
         shell: powershell
         run: |
-          python -m pip install --disable-pip-version-check pyinstaller py7zr
-          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" --add-data "runtime\native_worker.py;." --add-data "index.html;site" --add-data "sw.js;site" --add-data "assets;site/assets" --add-data "docs;site/docs" --add-data "notebooks;site/notebooks" runtime\application.py
-          Copy-Item -Force dist\ModelRuntime.exe runtime\ModelRuntime.exe
-      - name: Smoke test standalone Runtime EXE
-        shell: powershell
-        run: |
-          $env:LLAMA_SERVER_PATH = "missing-llama-server.exe"
-          $env:MODEL_CACHE_ROOT = "$env:RUNNER_TEMP\model-cache"
-          $env:MODEL_DESKTOP_CONFIG = "$env:RUNNER_TEMP\desktop-source.json"
-          $env:MODEL_BRIDGE_PORT = "8765"
-          $env:MODEL_SERVER_PORT = "8080"
-          $stdout = "$env:RUNNER_TEMP\runtime-stdout.log"
-          $stderr = "$env:RUNNER_TEMP\runtime-stderr.log"
-          $p = Start-Process -FilePath "runtime\ModelRuntime.exe" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-          try {
-            $ok = $false
-            for ($i = 0; $i -lt 80; $i++) {
-              Start-Sleep -Milliseconds 250
-              if ($p.HasExited) { Get-Content $stderr; throw "Runtime exited during smoke test" }
-              try {
-                $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 1
-                if ($health.ok) { $ok = $true; break }
-              } catch {}
-            }
-            if (-not $ok) { throw "Runtime health timed out" }
-            if ([int]$health.version -ne 18) { throw "Old executable packaged" }
-            $homepageResponse = Invoke-WebRequest "http://127.0.0.1:8765/" -UseBasicParsing -TimeoutSec 5
-            if ($homepageResponse.Content -notmatch "native-workspaces.js" -or $homepageResponse.Content -notmatch "desktop-source.js") { throw "Embedded website is incomplete" }
-            $video = Invoke-RestMethod "http://127.0.0.1:8765/v1/video/status" -TimeoutSec 5
-            if (-not $video.workflow_resources_ready -or -not $video.archive_support) { throw "Video resources missing" }
-            if (($video.supported_adapters | Measure-Object).Count -lt 2) { throw "Video adapters missing" }
-            $image = Invoke-RestMethod "http://127.0.0.1:8765/v1/image/status" -TimeoutSec 5
-            if (($image.supported_adapters | Measure-Object).Count -lt 3) { throw "Image adapters missing" }
-            $tasks = Invoke-RestMethod "http://127.0.0.1:8765/v1/tasks/status" -TimeoutSec 5
-            if (($tasks.supported_adapters | Measure-Object).Count -lt 2 -or [int]$tasks.port -ne 8091) { throw "Task adapters missing" }
-            $package = Invoke-RestMethod "http://127.0.0.1:8765/v1/packages/status" -TimeoutSec 5
-            if ($package.phase -ne "idle") { throw "Package materializer not idle" }
-            $runtime = Invoke-RestMethod "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 10
-            if ([int]$runtime.runtime_version -ne 18 -or $runtime.remote_auth_required) { throw "Unexpected Runtime version/auth default" }
-            if ($null -eq $runtime.hardware.memory.available_bytes -or $null -eq $runtime.hardware.cache_disk.free_bytes) { throw "Hardware preflight missing" }
-            $native = Invoke-RestMethod "http://127.0.0.1:8765/v1/native/catalog" -TimeoutSec 5
-            if (($native.models | Measure-Object).Count -ne 5) { throw "Native adapters missing" }
-            $desktop = Invoke-RestMethod "http://127.0.0.1:8765/v1/desktop/status" -TimeoutSec 5
-            if (-not $desktop.read_only -or -not $desktop.instance_id) { throw "Desktop source endpoint missing" }
-            New-Item -ItemType Directory -Force qa-evidence | Out-Null
-            @{ version = 18; executable_smoke = "PASS"; embedded_website = "PASS"; desktop_endpoint = "PASS"; actual_drive_desktop_tested = $false; model_inference_tested = $false } | ConvertTo-Json | Set-Content qa-evidence\windows-package.json
-          } finally {
-            if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-          }
-      - name: Parse scripts and exercise fresh noninteractive installation
-        shell: powershell
-        run: |
-          foreach ($file in (Get-ChildItem runtime\*.ps1)) {
-            $tokens = $null; $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+          foreach ($file in (Get-ChildItem runtime\*.ps1) + (Get-ChildItem tools\*.ps1)) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { $errors | Write-Error; exit 1 }
           }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\launch_model.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\install_runtime.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\background.ps1 -SelfTest
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\remote_nvidia.ps1 -SelfTest
-          $originalLocal = $env:LOCALAPPDATA
+          $oldLocal=$env:LOCALAPPDATA
           try {
-            $env:LOCALAPPDATA = "$env:RUNNER_TEMP\model-fresh-install"
+            $env:LOCALAPPDATA="$env:RUNNER_TEMP\model-fresh-install"
             powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\install_runtime.ps1 -NoStart -CacheRoot "$env:RUNNER_TEMP\model-fresh-cache"
-            if ($LASTEXITCODE -ne 0) { throw "Fresh installation failed" }
-            $config = Get-Content "$env:LOCALAPPDATA\JvustModel\runtime.json" -Raw | ConvertFrom-Json
-            if (-not (Test-Path -LiteralPath $config.llamaServerPath)) { throw "Installed CPU engine missing" }
-            if (-not (Test-Path "$env:LOCALAPPDATA\JvustModel\app\ModelRuntime.exe")) { throw "Installed Runtime missing" }
-            @{ fresh_install = "PASS"; manual_llama_selection = $false; cache_deleted = $false } | ConvertTo-Json | Set-Content qa-evidence\installer.json
+            if ($LASTEXITCODE -ne 0) { throw 'Fresh install failed' }
+            $cfg=Get-Content "$env:LOCALAPPDATA\JvustModel\runtime.json" -Raw | ConvertFrom-Json
+            if (-not (Test-Path -LiteralPath $cfg.llamaServerPath)) { throw 'CPU engine missing' }
+            if (-not (Test-Path "$env:LOCALAPPDATA\JvustModel\app\ModelRuntime.exe")) { throw 'Runtime missing' }
           } finally {
-            Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name JvustModelRuntime -ErrorAction SilentlyContinue
-            $env:LOCALAPPDATA = $originalLocal
+            Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name JvustModelRuntime -ErrorAction SilentlyContinue
+            $env:LOCALAPPDATA=$oldLocal
           }
-      - name: Read-only public OAuth deployment probe (API mode only)
+      - name: Read-only public OAuth probe (optional API source)
         run: python -m tools.probe_oauth_public
-      - name: Assemble matching source, engine and executable
+      - name: Assemble matching source and binary; no model weights
         shell: powershell
         run: |
-          $root = "Model-Runtime"
+          $root='Model-Runtime'
           New-Item -ItemType Directory -Force $root | Out-Null
-          foreach ($folder in @("runtime", "assets", "docs", "notebooks", "governance", "tests", "tools", "workers")) { Copy-Item -Recurse -Force $folder "$root\$folder" }
-          foreach ($file in @("README.md", "MODEL_ENABLEMENT_PLAN.md", "index.html", "sw.js")) { Copy-Item -Force $file "$root\$file" }
+          foreach ($folder in @('runtime','assets','docs','notebooks','governance','tests','tools','workers')) { Copy-Item -Recurse -Force $folder "$root\$folder" }
+          foreach ($file in @('README.md','MODEL_ENABLEMENT_PLAN.md','index.html','sw.js','Run-Model-0.19.cmd')) { Copy-Item -Force $file "$root\$file" }
           Copy-Item -Recurse qa-evidence "$root\qa-evidence"
           Get-ChildItem $root -Directory -Recurse -Filter __pycache__ | Remove-Item -Recurse -Force
           Get-ChildItem $root -File -Recurse | Where-Object { $_.Extension -in @('.ttf','.otf','.woff','.woff2') } | Remove-Item -Force
           Get-FileHash "$root\runtime\ModelRuntime.exe" -Algorithm SHA256 | Format-List | Out-File "$root\EXE_SHA256.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: Model-0.18-Desktop-${{ github.sha }}
+          name: Model-0.19-Activation-${{ github.sha }}
           path: Model-Runtime/
           if-no-files-found: error
   browser:
@@ -127,13 +80,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
       - run: python -m pip install playwright==1.55.0
       - run: python -m playwright install --with-deps chromium
-      - name: Real browser and localhost HTTP (API and desktop modes)
+      - name: Existing site and new activation lifecycle UI
         run: |
           python -m tools.check_browser
           python -m tools.check_desktop_browser
+          CHROMIUM_PATH=$(python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()") python -m tools.check_activation_browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -152,11 +106,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
       - run: python -m pip install huggingface_hub==0.34.4 Pillow==11.3.0
-      - name: Actual official-model CPU inference in private environment
+      - name: Actual CPU inference, separate from mocked lifecycle tests
         env:
-          HF_HUB_DISABLE_XET: "1"
+          HF_HUB_DISABLE_XET: '1'
         run: python -m tools.smoke_native_models --model ${{ matrix.model }}
       - uses: actions/upload-artifact@v4
         if: always()
@@ -174,12 +128,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
       - run: python -m pip install huggingface_hub==0.34.4
       - run: python -m tools.prepare_llama
-      - name: Actual chat, embedding, rerank and desktop-source cold/warm CPU inference
+      - name: Actual chat, embedding, rerank and cold/warm cache CPU inference
         env:
-          HF_HUB_DISABLE_XET: "1"
+          HF_HUB_DISABLE_XET: '1'
         run: |
           python -m tools.smoke_gguf_models
           python -m tools.smoke_desktop_gguf

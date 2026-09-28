@@ -11,8 +11,10 @@ from typing import Callable
 
 try:
     from .drive_cache import DriveCache, DriveFileSpec, default_cache_root
+    from .package_integrity import safe_relative, read_json, check_index_manifest, verify_directory
 except ImportError:
     from drive_cache import DriveCache, DriveFileSpec, default_cache_root
+    from package_integrity import safe_relative, read_json, check_index_manifest, verify_directory
 
 
 PACKAGE_ROOT = Path(
@@ -28,7 +30,8 @@ _COPY_FALLBACK_LIMIT = int(
 
 
 def _safe_package_path(value: str) -> str:
-    raw = str(value or "").replace("\\", "/").strip().strip("/")
+    raw = str(value or "").replace("\\", "/").strip()
+    safe_relative(raw)
     path = PurePosixPath(raw)
     if not raw or path.is_absolute() or ".." in path.parts:
         raise ValueError("Invalid package_path.")
@@ -38,7 +41,8 @@ def _safe_package_path(value: str) -> str:
 
 
 def _safe_relative_path(value: str, package_path: str) -> str:
-    raw = str(value or "").replace("\\", "/").strip().strip("/")
+    raw = str(value or "").replace("\\", "/").strip()
+    safe_relative(raw)
     path = PurePosixPath(raw)
     if not raw or path.is_absolute() or ".." in path.parts:
         raise ValueError("Invalid manifest relative_path.")
@@ -84,11 +88,11 @@ def normalize_manifest(payload: dict) -> tuple[str, list[dict]]:
         spec = DriveFileSpec.from_payload(raw)
         if spec.size is None:
             raise ValueError(f"{relative_path} is missing Drive file size.")
-        if relative_path in seen_paths:
+        if relative_path.casefold() in seen_paths:
             raise ValueError(f"Duplicate package path: {relative_path}")
         if spec.file_id in seen_ids:
             raise ValueError(f"Duplicate Drive file ID: {spec.file_id}")
-        seen_paths.add(relative_path)
+        seen_paths.add(relative_path.casefold())
         seen_ids.add(spec.file_id)
         files.append(
             {
@@ -316,6 +320,16 @@ class PackageRuntime:
             completed = 0
             cached_bytes = 0
 
+            # Inspect tiny indexes before copying/downloading multi-GB shards.
+            paths = {item["relative_path"] for item in files}
+            for item in files:
+                if item["relative_path"].endswith(".index.json"):
+                    spec = item["spec"]
+                    if spec.size > 20 * 1024**2:
+                        raise ValueError("Checkpoint index is too large")
+                    cached = self.drive_cache.cached_path(spec) or self.drive_cache.download(
+                        spec, token, lambda received, total: self._package_progress(0, received, total))
+                    check_index_manifest(item["relative_path"], read_json(cached), paths)
             for index, item in enumerate(files, start=1):
                 if self.cancel.is_set():
                     raise RuntimeError("任务已取消。")
@@ -350,6 +364,7 @@ class PackageRuntime:
                     self.cached_bytes = cached_bytes
                     self.materialized_files = index
 
+            verify_directory(destination, {item["relative_path"]: int(item["spec"].size) for item in files})
             self._write_manifest(destination, package_path, files)
 
             with self.lock:

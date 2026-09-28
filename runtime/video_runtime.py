@@ -768,28 +768,16 @@ class VideoRuntime:
         return None
 
     def _resolve_history_output(self, comfy_root: Path, entry: dict, started: float) -> Path:
-        outputs = entry.get("outputs") or {}
-        candidate = self._find_output_candidate(outputs)
-        if candidate:
-            filename = str(candidate.get("filename") or "")
-            subfolder = str(candidate.get("subfolder") or "")
-            folder_type = str(candidate.get("type") or "output")
-            base = comfy_root / "ComfyUI" / ("output" if folder_type == "output" else folder_type)
-            path = (base / subfolder / filename).resolve()
-            if path.exists() and path.is_file():
+        candidate = self._find_output_candidate(entry.get("outputs") or {})
+        if candidate and candidate.get("type", "output") == "output":
+            root = (comfy_root / "ComfyUI" / "output").resolve()
+            name, folder = str(candidate.get("filename") or ""), str(candidate.get("subfolder") or "")
+            path = root / folder / name
+            if not name or Path(name).name != name or "\\" in name or "\\" in folder or path.is_symlink() or not path.resolve().is_relative_to(root):
+                raise ValueError("Invalid backend video path")
+            if path.is_file() and path.suffix.lower() in {".mp4", ".webm", ".mkv", ".gif"}:
                 return path
-
-        output_dir = comfy_root / "ComfyUI" / "output"
-        candidates = []
-        if output_dir.exists():
-            for ext in ("*.mp4", "*.webm", "*.mkv", "*.gif"):
-                candidates.extend(output_dir.rglob(ext))
-        candidates = [
-            p for p in candidates if p.is_file() and p.stat().st_mtime >= started - 5
-        ]
-        if not candidates:
-            raise RuntimeError("ComfyUI 已完成，但没有找到生成的视频文件。")
-        return max(candidates, key=lambda p: p.stat().st_mtime)
+        raise RuntimeError("本任务 history 没有视频结果；不会替换成其他任务的输出")
 
     def _wait_for_result(self, comfy_root: Path, prompt_id: str, started: float) -> Path:
         deadline = time.time() + VIDEO_TIMEOUT_SECONDS

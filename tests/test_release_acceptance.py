@@ -27,7 +27,7 @@ def manifest(model_id='chronos_2', paths=None):
 
 
 class InputContract(unittest.TestCase):
-    def test_all_five_families_declared(self): self.assertEqual(len(CATALOG), 5)
+    def test_existing_plus_flux_family_declared(self): self.assertEqual(set(CATALOG), {"got_ocr2", "chronos_2", "timesfm_2_0_500m", "wan22_t2v_a14b", "wan22_i2v_a14b", "flux2_klein_4b_diffusers"})
     def test_csv_column(self): self.assertEqual(series_values({'csv': 'y,z\n' + '\n'.join(f'{i},0' for i in range(16)), 'column': 'y'}), list(range(16)))
     def test_numeric_text(self): self.assertEqual(len(series_values({'csv': ' '.join(str(i) for i in range(16))})), 16)
     def test_missing_csv_column(self):
@@ -161,7 +161,7 @@ class HTTPContract(unittest.TestCase):
         conn=http.client.HTTPConnection('127.0.0.1',self.server.server_address[1],timeout=3)
         conn.request(method,path,body=body,headers=headers or {}); response=conn.getresponse(); data=response.read(); conn.close(); return response.status,data
     def test_health(self): self.assertEqual(self.req('/health')[0],200)
-    def test_native_catalog(self): self.assertEqual(len(json.loads(self.req('/v1/native/catalog')[1])['models']),5)
+    def test_native_catalog(self): self.assertEqual(len(json.loads(self.req('/v1/native/catalog')[1])['models']),6)
     def test_media_requires_token(self):
         with patch.object(application.bridge,'REMOTE_TOKEN','testing'):
             for path in ('/v1/image/file?job_id=foo','/v1/video/file?job_id=foo','/v1/native/media?job_id=foo','/v1/native/result?job_id=foo'):

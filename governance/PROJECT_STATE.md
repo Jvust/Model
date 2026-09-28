@@ -1,3 +1,14 @@
+# 当前候选状态：Model 0.19（本地实现，待同步）
+
+Base `f163f5cc9e76d7f13cf5f48a373727f16d98b365`，目标分支 `feat/model-activation-resume-20260928`。
+本轮统一启用、严格权重校验、缓存复用、参数/聊天恢复与逐项批量接续已实现，312项Python测试通过。详见 docs/ACTIVATION_AND_RESUME.md 和 docs/EVALUATION_0_19.md。
+
+**新代码尚未推送GitHub或上传Drive；Windows/NVIDIA/真实DriveFS未验收。** 不能把下方历史状态的CI证据算成本轮候选实测。pending_sync.json列出阻塞。
+
+---
+
+# 历史0.18状态（保留，不作为0.19验收结论）
+
 # Model Project State
 
 Updated: 2026-09-27

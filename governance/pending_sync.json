@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "project": "Jvust/Model",
+  "candidate": "0.19-activation-rc1",
+  "base_commit": "f163f5cc9e76d7f13cf5f48a373727f16d98b365",
+  "target_branch": "feat/model-activation-resume-20260928",
+  "items": [
+    {
+      "id": "github-source-push",
+      "severity": "blocking_before_remote_handoff",
+      "status": "not_done",
+      "reason": "Current exposed GitHub connector methods are read-only; no authenticated writable CLI in container.",
+      "action": "Apply manifest-verified change set onto exact base; push only feature branch; create review PR; do not merge."
+    },
+    {
+      "id": "drive-artifact-archive",
+      "severity": "blocking_before_archive_claim",
+      "status": "not_done",
+      "reason": "Current Drive connector exposes reads but no upload action.",
+      "action": "Upload candidate/change/evidence archives, verify bytes, record actual Drive file IDs and SHA256."
+    },
+    {
+      "id": "windows-gpu-acceptance",
+      "severity": "blocking_before_final_release",
+      "status": "not_done",
+      "reason": "No Windows/NVIDIA hardware or actual user DriveFS mount in this execution environment.",
+      "action": "Run prepared Windows build and real intended-host acceptance; retain failures as evidence."
+    }
+  ]
+}
