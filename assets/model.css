@@ -213,3 +213,20 @@ main { padding: 30px 0 48px; }
   .video-settings { grid-template-columns: 1fr 1fr; }
   .video-actions button { flex: 1; }
 }
+/* Qwen 2511 reference comparison: device-local images, no public upload. */
+.edit-card { align-items: start; }
+.edit-controls label { display: grid; gap: .5rem; }
+.edit-controls select, .edit-controls input { width: 100%; box-sizing: border-box; }
+.edit-controls select { padding: 10px; color: var(--text); background: #0d1322; border: 1px solid var(--line); border-radius: 9px; }
+.edit-package { overflow-wrap: anywhere; }
+.edit-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.edit-comparison figure { margin: 0; min-width: 0; }
+.edit-comparison figcaption { margin-bottom: .6rem; font-weight: 600; }
+.edit-comparison img { width: 100%; max-height: 65vh; object-fit: contain; border-radius: 12px; }
+.edit-comparison a { display: inline-block; margin-top: .75rem; }
+.edit-comparison [hidden] { display: none; }
+.edit-progress { width: 100%; }
+.video-download { margin: 12px; padding: 10px 16px; color: var(--blue); border: 1px solid var(--line); border-radius: 9px; }
+.video-download[hidden] { display: none; }
+.video-preview > .note { padding: 0 16px 12px; text-align: center; }
+@media (max-width: 700px) { .edit-card { grid-template-columns: 1fr; } }

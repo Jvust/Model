@@ -211,15 +211,16 @@
     if (!accessToken) throw new Error("Google Drive 尚未授权。");
 
     const folderName = String(name || "").trim();
-    const parent = String(parentId || "root").trim() || "root";
+    // Explicit null finds nested linked folders; default lookup stays root-only.
+    const parent = parentId === null ? null : String(parentId || "root").trim() || "root";
     if (!folderName) throw new Error("文件夹名称不能为空。");
 
     const query = [
       "mimeType = '" + FOLDER_MIME + "'",
       "name = '" + escapeQueryLiteral(folderName) + "'",
-      "'" + escapeQueryLiteral(parent) + "' in parents",
+      parent === null ? null : "'" + escapeQueryLiteral(parent) + "' in parents",
       "trashed = false"
-    ].join(" and ");
+    ].filter(Boolean).join(" and ");
 
     const params = new URLSearchParams({
       q: query,
@@ -244,6 +245,9 @@
 
     const data = await response.json();
     const folders = Array.isArray(data.files) ? data.files : [];
+    if (parent === null && folders.length > 1) {
+      throw new Error("Drive 中有多个同名文件夹：" + folderName + "。请在主模型库中保留一个明确的模型包，避免选错文件。");
+    }
     return {
       folder: folders[0] || null,
       matches: folders

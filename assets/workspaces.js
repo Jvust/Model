@@ -111,7 +111,7 @@
       <div class="workspace-head">
         <div class="kicker">AI WORKSPACES · MULTI BACKEND</div>
         <h2>更多 AI 模型工作区</h2>
-        <p>模型库会根据分类选择对应工作区。GGUF 聊天和视频工作区已经接通；下面的图像、视觉、检索和时序界面先统一好输入与运行方案。</p>
+        <p>从模型库选择模型进入对应工作区。2511 支持保留主体的背景和光线编辑；实际可用性以编辑环境检查为准。</p>
       </div>
       <div class="workspace-tabs" role="tablist" aria-label="AI 模型工作区"></div>
       <div class="workspace-content"></div>
@@ -124,6 +124,7 @@
   let active = workspaces[0].id;
   let backendState = null;
   let selectedImageModel = null;
+  let selectedEditModel = null;
   let imagePollTimer = null;
   let selectedTaskModel = null;
   let taskPollTimer = null;
@@ -547,7 +548,12 @@
 
   function renderContent() {
     const item = workspaces.find(entry => entry.id === active) || workspaces[0];
+    window.QwenImageEditor?.unmount();
     content.textContent = "";
+    if (item.id === "image-edit" && selectedEditModel && window.QwenImageEditor) {
+      window.QwenImageEditor.mount(content, selectedEditModel);
+      return;
+    }
     const card = document.createElement("div");
     card.className = "workspace-card";
 
@@ -714,6 +720,9 @@
       if (model.workspace === "image-generation") {
         selectedImageModel = model;
         active = "image-generation";
+      } else if (model.id === "qwen_image_edit_2511" && model.workspace === "image-edit") {
+        selectedEditModel = model;
+        active = "image-edit";
       } else if (model.workspace === "embedding" && model.taskKind) {
         selectedTaskModel = model;
         active = "embedding-rag";

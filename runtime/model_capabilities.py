@@ -7,6 +7,7 @@ from typing import Any
 # is scanned by the website; this audit snapshot only records what was missing
 # from AI-Model-Vault on 2026-09-26.
 MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
+    "qwen_image_edit_2511": {"availability": "environment_required", "adapter": "Diffusers", "reason": "2511 参考图编辑已接入；需检查 CUDA 编辑环境并完成本地模型包准备。"},
     "qwen_image_2_1_int8": {"availability": "automatic", "adapter": "ComfyUI + ComfyUI-GGUF", "reason": "已接入 Qwen-Image 2.1 GGUF 三文件工作流；网页可链接 Drive 根目录现有模型文件夹，无需复制权重。"},
     "flux_1_dev": {"availability": "incomplete", "adapter": "ComfyUI/Diffusers", "reason": "Drive 缺少 FLUX.1-dev 主权重。"},
     "flux_1_kontext_dev": {"availability": "incomplete", "adapter": "ComfyUI/Diffusers", "reason": "Drive 缺少 FLUX.1-Kontext-dev 主权重或依赖。"},
@@ -36,7 +37,7 @@ MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "creative_writing_4b_q8": {"availability": "automatic", "adapter": "llama.cpp", "reason": "GGUF 写作模型已接入。"},
 }
 
-_LINKED_MODEL_SOURCES = {"qwen_image_2_1_int8"}
+_LINKED_MODEL_SOURCES = {"qwen_image_2_1_int8", "qwen_image_edit_2511"}
 
 _MISSING_FROM_VAULT = {
     "qwen_image_2_1_int8",
@@ -54,6 +55,7 @@ _MISSING_FROM_VAULT = {
 }
 
 _STATUS_LABELS = {
+    "environment_required": "待检查编辑环境",
     "automatic": "可直接使用",
     "adapter_required": "需要适配器",
     "workflow_required": "需要工作流",

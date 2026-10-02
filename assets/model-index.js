@@ -203,6 +203,13 @@
   }
 
   function matchRegistry(relativePath, registry) {
+    // The existing Drive source is an official sharded Diffusers directory.
+    // Recognize it even when the vault registry does not contain a 2511 entry.
+    if (String(relativePath || "").split("/").some(part => normalizeName(part) === "qwenimageedit2511")) {
+      return { id: "qwen_image_edit_2511", name: "Qwen-Image-Edit-2511",
+        repo: "Qwen/Qwen-Image-Edit-2511", category: "image-edit",
+        recommended_runtime: ["diffusers"], capabilities: ["reference-image", "scene-edit"] };
+    }
     if (!registry || !Array.isArray(registry.models)) return null;
     const normalizedPath = normalizeName(relativePath);
     let best = null;
@@ -254,6 +261,7 @@
   }
 
   function chooseBackend(entry, files) {
+    if (entry && entry.id === "qwen_image_edit_2511") return "Diffusers";
     const extensions = new Set(files.map(file => extensionOf(file.name)));
     const runtimes = new Set(
       (entry && entry.recommended_runtime ? entry.recommended_runtime : [])
@@ -332,6 +340,8 @@
     function walk(node) {
       if (!node) return;
       const relativePath = String(node.relativePath || "");
+      if (relativePath.split("/").some(part => [".cache", ".hf-cache", "offload", "inputs", "outputs"].includes(part)) &&
+          relativePath.toLowerCase().includes("qwen-image-edit-2511")) return;
       if (
         node.file &&
         !relativePath.startsWith(".hf-cache/")

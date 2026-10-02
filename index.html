@@ -7,7 +7,7 @@
   <meta name="description" content="通过 Google Drive API 浏览模型，本机 CPU/GPU 负责推理，并直接在网页聊天。" />
   <meta name="theme-color" content="#0b0f1d" />
   <link rel="icon" href="./assets/star.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./assets/model.css?v=10" />
+  <link rel="stylesheet" href="./assets/model.css?v=12" />
 </head>
 <body>
   <header class="site-header shell">
@@ -24,7 +24,7 @@
       <h1>Drive 里是一套模型库，<br /><span>网站自动判断该用哪个后端。</span></h1>
       <p>
         Google Drive API 负责模型发现、元数据和模型文件读取；网站读取 AI-Model-Vault/model_metadata.json，
-        把分片权重归并成模型包。GGUF 可直接聊天；已适配的 Wan2.2 / HunyuanVideo 视频模型可直接进入网页视频工作区。
+        把分片权重归并成模型包。GGUF 可直接聊天；2511 支持参考图场景编辑；已适配的视频模型可进入网页视频工作区。
       </p>
       <div class="hero-actions">
         <button id="loginBtn" data-icon="cloud" class="primary" type="button">连接 Google Drive</button>
@@ -130,6 +130,7 @@
             <label>Seed <input id="videoSeed" type="number" step="1" placeholder="随机" /></label>
           </div>
 
+          <div id="videoDuration" class="note" aria-live="polite">预计视频时长 2.04 秒（不是生成耗时）</div>
           <div class="video-actions">
             <button id="videoGenerateBtn" class="primary" data-icon="play" type="button">生成视频</button>
             <button id="videoStopBtn" type="button" disabled>停止任务</button>
@@ -147,6 +148,8 @@
         <div class="video-preview">
           <div id="videoEmpty" class="video-empty">生成完成后，视频会直接显示在这里。</div>
           <video id="videoResult" controls playsinline preload="metadata" hidden></video>
+          <a id="videoDownload" class="video-download" hidden download="model-video.mp4">下载生成的视频</a>
+          <p class="note">关闭工作区不会停止任务；请使用“停止任务”。浏览器不支持的格式仍可下载播放。</p>
         </div>
       </div>
     </section>
@@ -168,11 +171,13 @@
   </main>
 
   <script src="./assets/config.js?v=11"></script>
-  <script src="./assets/model-index.js?v=15"></script>
-  <script src="./assets/model-capabilities.js?v=5"></script>
-  <script src="./assets/drive-client.js?v=11"></script>
-  <script src="./assets/app.js?v=20"></script>
-  <script src="./assets/workspaces.js?v=6"></script>
+  <script src="./assets/model-index.js?v=16"></script>
+  <script src="./assets/model-capabilities.js?v=6"></script>
+  <script src="./assets/drive-client.js?v=12"></script>
+  <script src="./assets/video-controls.js?v=1"></script>
+  <script src="./assets/app.js?v=22"></script>
+  <script src="./assets/image-edit.js?v=1"></script>
+  <script src="./assets/workspaces.js?v=7"></script>
   <script src="./assets/cache-ui.js?v=2"></script>
 </body>
 </html>

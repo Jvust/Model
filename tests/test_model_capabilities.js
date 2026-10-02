@@ -3,7 +3,8 @@ global.window = {};
 require("../assets/model-capabilities.js");
 
 const states = window.MODEL_CAPABILITIES;
-assert.strictEqual(Object.keys(states).length, 27);
+assert.strictEqual(Object.keys(states).length, 28);
+assert.strictEqual(states.qwen_image_edit_2511.label, "待检查编辑环境");
 assert.strictEqual(states.qwen_image_2_1_int8.label, "可直接使用");
 assert.strictEqual(states.flux2_klein_4b_fp8.label, "可直接使用");
 assert.strictEqual(states.qwen3_14b_q6.label, "可直接使用");
