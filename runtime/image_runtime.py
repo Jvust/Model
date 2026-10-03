@@ -11,6 +11,7 @@ import zipfile
 from collections import deque
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 try:
     from .drive_cache import DriveCache, DriveFileSpec, default_cache_root
@@ -577,6 +578,8 @@ class ImageRuntime:
 
     def _set_phase(self, phase: str, detail: str = "") -> None:
         with self.lock:
+            if self.cancel.is_set():
+                raise RuntimeError("任务已取消。")
             self.phase = phase
             self.detail = detail
         self.log(f"{phase}: {detail}")
@@ -592,7 +595,6 @@ class ImageRuntime:
             running = bool(
                 self.job_thread
                 and self.job_thread.is_alive()
-                and self.phase not in {"complete", "failed", "cancelled"}
             )
             return {
                 "job_id": self.job_id,
@@ -607,7 +609,9 @@ class ImageRuntime:
                 "download_progress": progress,
                 "prompt_id": self.prompt_id,
                 "output_ready": bool(
-                    self.output_path and Path(self.output_path).exists()
+                    self.phase == "complete" and self.output_path
+                    and Path(self.output_path).is_file()
+                    and Path(self.output_path).stat().st_size > 0
                 ),
                 "output_name": (
                     Path(self.output_path).name if self.output_path else None
@@ -636,7 +640,6 @@ class ImageRuntime:
         if not hardware["supported"]:
             raise RuntimeError("硬件不支持：" + str(hardware["detail"]))
 
-        self.comfy.cancel.clear()
         if self.comfy.snapshot().get("running"):
             raise RuntimeError("已有视频任务正在使用 ComfyUI，请先等待或停止视频任务。")
 
@@ -646,6 +649,7 @@ class ImageRuntime:
         with self.lock:
             if self.job_thread and self.job_thread.is_alive():
                 raise RuntimeError("已有图像任务正在运行。")
+            self.comfy.cancel.clear()
             self.cancel.clear()
             self.reset_state()
             self.job_id = uuid.uuid4().hex
@@ -656,42 +660,59 @@ class ImageRuntime:
             self.started_at = time.time()
             job_id = self.job_id
 
-        thread = threading.Thread(
-            target=self._run_job,
-            args=(job_id, adapter_key, dict(payload)),
-            daemon=True,
-        )
-        with self.lock:
+            thread = threading.Thread(
+                target=self._run_job,
+                args=(job_id, adapter_key, dict(payload)),
+                daemon=True,
+            )
             self.job_thread = thread
-        thread.start()
+            thread.start()
         return self.snapshot()
 
     def stop(self) -> dict:
-        self.cancel.set()
-        self.comfy.cancel.set()
-        try:
-            json_request(COMFY_BASE + "/interrupt", method="POST", payload={}, timeout=2)
-        except Exception:
-            pass
         with self.lock:
-            if self.phase not in {"idle", "complete", "failed"}:
+            thread = self.job_thread
+            if not thread or not thread.is_alive():
+                return self.snapshot()
+            self.cancel.set()
+            # Image preparation borrows this helper, but idle stop must never
+            # cancel a video or another ComfyUI user's prompt.
+            self.comfy.cancel.set()
+            prompt_id = self.prompt_id
+            self.phase = "cancelling"
+            self.detail = "正在停止图像任务，等待工作线程退出"
+        if prompt_id:
+            self._cancel_prompt(prompt_id)
+        if thread is not threading.current_thread():
+            thread.join(timeout=1)
+        with self.lock:
+            if self.phase == "cancelling" and not thread.is_alive():
                 self.phase = "cancelled"
                 self.detail = "图像任务已取消"
                 self.finished_at = time.time()
         return self.snapshot()
+
+    def _cancel_prompt(self, prompt_id: str) -> None:
+        # The job endpoint checks ownership atomically; never use a global
+        # interrupt when another client may be using the same ComfyUI server.
+        for endpoint, payload in (("/queue", {"delete": [prompt_id]}), ("/api/jobs/" + quote(prompt_id, safe="") + "/cancel", {})):
+            try:
+                json_request(COMFY_BASE + endpoint, method="POST", payload=payload, timeout=2)
+            except Exception as error:
+                self.log("Could not cancel owned ComfyUI prompt; verify ComfyUI v0.37.0 or newer: " + repr(error))
 
     def shutdown(self) -> None:
         self.cancel.set()
 
     def output_file(self, job_id: str) -> Path:
         with self.lock:
-            if not self.job_id or job_id != self.job_id or not self.output_path:
+            if self.phase != "complete" or not self.job_id or job_id != self.job_id or not self.output_path:
                 raise FileNotFoundError("图像输出不存在。")
             path = Path(self.output_path).resolve()
         root = IMAGE_OUTPUT_ROOT.resolve()
         if os.path.commonpath([str(root), str(path)]) != str(root):
             raise ValueError("非法图像输出路径。")
-        if not path.exists() or not path.is_file():
+        if not path.is_file() or path.stat().st_size == 0:
             raise FileNotFoundError("图像输出文件不存在。")
         return path
 
@@ -865,7 +886,9 @@ class ImageRuntime:
 
     def _resolve_image(self, comfy_root: Path, entry: dict, started: float) -> Path:
         outputs = entry.get("outputs") or {}
-        for node in outputs.values():
+        output_node = "13" if self.adapter == "flux2_klein_4b_fp8" else "8"
+        output_dir = (comfy_root / "ComfyUI" / "output").resolve()
+        for node in [outputs.get(output_node)]:
             if not isinstance(node, dict):
                 continue
             for image in node.get("images") or []:
@@ -874,28 +897,14 @@ class ImageRuntime:
                 filename = str(image["filename"])
                 subfolder = str(image.get("subfolder") or "")
                 folder_type = str(image.get("type") or "output")
-                base = (
-                    comfy_root
-                    / "ComfyUI"
-                    / ("output" if folder_type == "output" else folder_type)
-                )
-                candidate = (base / subfolder / filename).resolve()
-                if candidate.exists() and candidate.is_file():
+                candidate = (output_dir / subfolder / filename).resolve()
+                if folder_type != "output" or not candidate.is_relative_to(output_dir):
+                    raise ValueError("ComfyUI 输出路径超出图像输出目录。")
+                if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    raise ValueError("ComfyUI 输出不是支持的图像文件。")
+                if candidate.is_file() and candidate.stat().st_size > 0:
                     return candidate
-
-        output_dir = comfy_root / "ComfyUI" / "output"
-        candidates: list[Path] = []
-        if output_dir.exists():
-            for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                candidates.extend(output_dir.rglob(ext))
-        candidates = [
-            path
-            for path in candidates
-            if path.is_file() and path.stat().st_mtime >= started - 5
-        ]
-        if not candidates:
-            raise RuntimeError("ComfyUI 已完成，但没有找到生成的图像文件。")
-        return max(candidates, key=lambda path: path.stat().st_mtime)
+        raise RuntimeError("ComfyUI 已完成，但当前任务的输出节点没有可用的图像文件。")
 
     def _wait_for_result(self, comfy_root: Path, prompt_id: str, started: float) -> Path:
         deadline = time.time() + IMAGE_TIMEOUT_SECONDS
@@ -912,7 +921,7 @@ class ImageRuntime:
                         "ComfyUI 图像生成失败："
                         + json.dumps(messages[-5:], ensure_ascii=False)
                     )
-                if entry.get("outputs"):
+                if entry.get("outputs") and (status_str == "success" or status.get("completed") is True):
                     return self._resolve_image(comfy_root, entry, started)
             time.sleep(1.5)
         raise RuntimeError("图像生成超时。")
@@ -967,6 +976,8 @@ class ImageRuntime:
             self._set_phase("generating", "ComfyUI 正在生成图像")
             generation_started = time.time()
             source = self._wait_for_result(portable, prompt_id, generation_started)
+            if self.cancel.is_set():
+                raise RuntimeError("任务已取消。")
 
             suffix = source.suffix.lower()
             if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -975,6 +986,9 @@ class ImageRuntime:
             shutil.copy2(source, output)
 
             with self.lock:
+                if self.cancel.is_set():
+                    output.unlink(missing_ok=True)
+                    raise RuntimeError("任务已取消。")
                 self.output_path = str(output)
                 self.phase = "complete"
                 self.detail = "图像生成完成"
@@ -984,6 +998,8 @@ class ImageRuntime:
             self.log(f"Image complete: {output.name}")
 
         except Exception as error:
+            if self.prompt_id:
+                self._cancel_prompt(self.prompt_id)
             with self.lock:
                 if self.cancel.is_set():
                     self.phase = "cancelled"

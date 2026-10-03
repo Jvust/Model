@@ -23,6 +23,7 @@ try:
     from .hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from .model_capabilities import all_capabilities
     from .package_runtime import PackageRuntime, manifest_summary
+    from .edit_runtime import EditRuntime
     from .task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from .image_runtime import (
         ImageRuntime,
@@ -42,6 +43,7 @@ except ImportError:
     from hardware import disk_status, gguf_preflight, nvidia_status, system_memory_status
     from model_capabilities import all_capabilities
     from package_runtime import PackageRuntime, manifest_summary
+    from edit_runtime import EditRuntime
     from task_runtime import TaskRuntime, adapter_for as task_adapter_for
     from image_runtime import (
         ImageRuntime,
@@ -100,6 +102,7 @@ DEFAULT_ORIGINS = ",".join(
     [
         "https://jvust.github.io",
         "https://jvust2.github.io",
+        "https://jvust1.github.io",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
     ]
@@ -616,8 +619,11 @@ VIDEO = VideoRuntime()
 IMAGE = ImageRuntime(VIDEO, DRIVE_CACHE, DRIVE_SESSION.get)
 TASK = TaskRuntime(DRIVE_CACHE, DRIVE_SESSION.get, resolve_llama_server)
 PACKAGE = PackageRuntime(DRIVE_CACHE, DRIVE_SESSION.get)
+EDIT = EditRuntime(PACKAGE)
+GENERATION_LOCK = threading.RLock()
 atexit.register(STATE.stop)
 atexit.register(PACKAGE.stop)
+atexit.register(EDIT.stop)
 atexit.register(TASK.stop)
 atexit.register(IMAGE.shutdown)
 atexit.register(VIDEO.shutdown)
@@ -625,7 +631,7 @@ atexit.register(VIDEO.shutdown)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DriveModelBridge/0.16"
+    server_version = "DriveModelBridge/0.17"
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -662,9 +668,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json(self) -> dict:
+    def _read_json(self, max_bytes: int = 262144) -> dict:
         length = int(self.headers.get("Content-Length", "0") or "0")
-        if length < 0 or length > 262144:
+        if length < 0 or length > max_bytes:
             raise ValueError("Request body too large.")
         raw = self.rfile.read(length) if length else b"{}"
         value = json.loads(raw.decode("utf-8"))
@@ -679,19 +685,29 @@ class Handler(BaseHTTPRequestHandler):
         status = 200
 
         range_header = self.headers.get("Range") or ""
-        if range_header.startswith("bytes="):
-            value = range_header[6:].split(",", 1)[0].strip()
-            left, _, right = value.partition("-")
-            if left:
-                start = int(left)
-            if right:
-                end = int(right)
-            else:
-                end = min(size - 1, start + 8 * 1024 * 1024 - 1)
-            if start < 0 or end < start or start >= size:
+        # Single ranges include suffix requests used by media players. Unsupported
+        # multi-ranges are ignored (200), never silently treated as the first range.
+        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Range
+        if range_header.startswith("bytes=") and "," not in range_header:
+            value = range_header[6:].strip()
+            left, separator, right = value.partition("-")
+            valid = bool(separator and (left or right) and
+                         (not left or left.isascii() and left.isdecimal()) and
+                         (not right or right.isascii() and right.isdecimal()) and
+                         len(left) < 20 and len(right) < 20)
+            if valid:
+                if left:
+                    start = int(left)
+                    end = min(int(right), size - 1) if right else size - 1
+                else:
+                    suffix_length = int(right)
+                    start = max(0, size - suffix_length)
+                    valid = suffix_length > 0
+            if not valid or start < 0 or end < start or start >= size:
                 self.send_response(416)
                 self._cors_headers()
                 self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             end = min(end, size - 1)
@@ -746,7 +762,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "Drive Model Local Runtime",
-                    "version": 16,
+                    "version": 17,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 },
             )
@@ -756,7 +772,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(403, {"error": "Origin not allowed."})
             return
 
-        media_paths = {"/v1/image/file", "/v1/video/file"}
+        media_paths = {"/v1/image/file"}
         if path.startswith("/v1/") and path not in media_paths and not self._authorized():
             self._json(401, {"error": "Runtime authorization required."})
             return
@@ -792,12 +808,35 @@ class Handler(BaseHTTPRequestHandler):
                     "image": IMAGE.snapshot(),
                     "task": TASK.snapshot(),
                     "package": PACKAGE.snapshot(),
+                    "edit": EDIT.snapshot(),
                     "hardware": runtime_hardware_snapshot(),
-                    "runtime_version": 16,
+                    "runtime_version": 17,
                     "remote_auth_required": bool(REMOTE_TOKEN),
                 }
             )
             self._json(200, payload)
+            return
+
+        if path.startswith("/v1/edit/"):
+            if not self._origin_allowed():
+                self._json(403, {"error": "Origin not allowed."})
+                return
+            try:
+                if path == "/v1/edit/status":
+                    self._json(200, EDIT.snapshot())
+                elif path == "/v1/edit/environment":
+                    self._json(200, EDIT.environment())
+                elif path == "/v1/edit/file":
+                    query = parse_qs(urlparse(self.path).query)
+                    self._serve_video_file(EDIT.output_file(str((query.get("job_id") or [""])[0])))
+                else:
+                    self._json(404, {"error": "Not found."})
+            except FileNotFoundError as error:
+                self._json(404, {"error": str(error)})
+            except ValueError as error:
+                self._json(400, {"error": str(error)})
+            except Exception as error:
+                self._json(500, {"error": str(error)})
             return
 
         if path == "/v1/packages/status":
@@ -885,15 +924,32 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         try:
-            payload = self._read_json()
+            payload = self._read_json(max_bytes=12 * 1024 * 1024 if path == "/v1/edit/generate" else 262144)
+
+            if path == "/v1/edit/generate":
+                with GENERATION_LOCK:
+                    if IMAGE.snapshot().get("running") or VIDEO.snapshot().get("running") or STATE.snapshot().get("running"):
+                        raise ValueError("请先停止其他图像、视频或聊天模型，再运行 2511 编辑。")
+                    result = EDIT.start(payload)
+                self._json(202, {"ok": True, "edit": result})
+                return
+
+            if path == "/v1/edit/stop":
+                result = EDIT.stop(job_id=payload.get("job_id")) if payload.get("job_id") else EDIT.stop()
+                self._json(200, {"ok": True, "edit": result})
+                return
 
             if path == "/v1/packages/materialize":
-                result = PACKAGE.start(payload)
+                with GENERATION_LOCK:
+                    if EDIT.snapshot().get("running"):
+                        raise ValueError("请先停止 2511 编辑，再重新准备模型包。")
+                    result = PACKAGE.start(payload)
                 self._json(202, {"ok": True, "package": result})
                 return
 
             if path == "/v1/packages/stop":
-                self._json(200, {"ok": True, "package": PACKAGE.stop()})
+                result = PACKAGE.stop(package_path=payload.get("package_path")) if payload.get("package_path") else PACKAGE.stop()
+                self._json(200, {"ok": True, "package": result})
                 return
 
             if path == "/v1/tasks/start":
@@ -1120,12 +1176,15 @@ class Handler(BaseHTTPRequestHandler):
                 model_name = str(payload.get("display_name") or payload.get("name") or spec.name)
                 relative_path = str(payload.get("relative_path") or spec.name)
                 token = DRIVE_SESSION.get()
-                result = STATE.start_drive(
-                    spec,
-                    model_name,
-                    relative_path,
-                    token,
-                )
+                with GENERATION_LOCK:
+                    if EDIT.snapshot().get("running"):
+                        raise ValueError("请先停止 2511 编辑任务。")
+                    result = STATE.start_drive(
+                        spec,
+                        model_name,
+                        relative_path,
+                        token,
+                    )
                 self._json(
                     202,
                     {
@@ -1143,9 +1202,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/v1/image/generate":
-                if VIDEO.snapshot().get("running"):
-                    raise RuntimeError("已有视频任务正在使用 ComfyUI，请先等待或停止视频任务。")
-                result = IMAGE.start(payload)
+                with GENERATION_LOCK:
+                    if EDIT.snapshot().get("running"):
+                        raise ValueError("请先停止 2511 编辑任务。")
+                    if VIDEO.snapshot().get("running"):
+                        raise RuntimeError("已有视频任务正在使用 ComfyUI，请先等待或停止视频任务。")
+                    result = IMAGE.start(payload)
                 self._json(202, {"ok": True, "image": result})
                 return
 
@@ -1154,9 +1216,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/v1/video/generate":
-                if IMAGE.snapshot().get("running"):
-                    raise RuntimeError("已有图像任务正在使用 ComfyUI，请先等待或停止图像任务。")
-                result = VIDEO.start(payload)
+                with GENERATION_LOCK:
+                    if EDIT.snapshot().get("running"):
+                        raise ValueError("请先停止 2511 编辑任务。")
+                    if IMAGE.snapshot().get("running"):
+                        raise RuntimeError("已有图像任务正在使用 ComfyUI，请先等待或停止图像任务。")
+                    result = VIDEO.start(payload)
                 self._json(202, {"ok": True, "video": result})
                 return
 
@@ -1180,7 +1245,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Drive Model Local Runtime v0.16")
+    print("Drive Model Local Runtime v0.17")
     print(f"Bridge: http://{HOST}:{BRIDGE_PORT}")
     print("Drive source: Google Drive API (no desktop mount required)")
     print("Cache root:", DRIVE_CACHE.root)

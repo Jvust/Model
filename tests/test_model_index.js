@@ -336,4 +336,32 @@ assert.strictEqual(
   false
 );
 
-console.log("model-index package tests passed");
+const editPath = "image_edit/Qwen-Image-Edit-2511";
+const editFiles = [
+  "model_index.json", "transformer/config.json", "transformer/model.safetensors",
+  "text_encoder/config.json", "text_encoder/model.safetensors",
+  "vae/config.json", "vae/model.safetensors", "tokenizer/tokenizer_config.json",
+  "scheduler/scheduler_config.json", "processor/preprocessor_config.json"
+].map((name, index) => file("edit-fixture-" + index, name.split("/").pop(), editPath + "/model/" + name, 100));
+const editTree = folder("AI-Model-Vault", "", [
+  folder("image_edit", "image_edit", [folder("Qwen-Image-Edit-2511", editPath, [
+    ...editFiles,
+    file("cache-fixture", "model.safetensors", editPath + "/.cache/model.safetensors", 100),
+    file("offload-fixture", "model.safetensors", editPath + "/offload/model.safetensors", 100)
+  ])])
+]);
+const edits = window.DriveModelIndex.flattenPackages(editTree, { models: [] });
+assert.strictEqual(edits.length, 1);
+assert.strictEqual(edits[0].id, "qwen_image_edit_2511");
+assert.strictEqual(edits[0].backend, "Diffusers");
+assert.strictEqual(edits[0].workspace, "image-edit");
+assert.strictEqual(edits[0].packagePath, editPath);
+assert.strictEqual(edits[0].packageFileCount, 10);
+assert.strictEqual(edits[0].directLaunch, false);
+const unrelated = window.DriveModelIndex.flattenPackages(
+  folder("AI-Model-Vault", "", [file("other", "model.safetensors", "image_edit/Qwen-Image-Edit-2509/model.safetensors", 100)]),
+  { models: [] }
+);
+assert.ok(unrelated.every(model => model.id !== "qwen_image_edit_2511"));
+
+console.log("model-index package and 2511 recognition tests passed");

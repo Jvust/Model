@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Check Python syntax
-        run: python -m py_compile runtime/local_bridge.py runtime/backends.py runtime/drive_cache.py runtime/hardware.py runtime/image_runtime.py runtime/package_runtime.py runtime/task_runtime.py runtime/video_runtime.py
+        run: python -m py_compile runtime/local_bridge.py runtime/backends.py runtime/drive_cache.py runtime/hardware.py runtime/image_runtime.py runtime/package_runtime.py runtime/task_runtime.py runtime/video_runtime.py runtime/edit_runtime.py runtime/edit_worker.py
 
       - name: Run bridge unit tests
         run: python -m unittest discover -s tests -v
@@ -33,10 +33,17 @@ jobs:
           node --check assets/drive-client.js
           node --check assets/app.js
           node --check assets/workspaces.js
+          node --check assets/image-edit.js
+          node --check assets/library-controls.js
+          node --check assets/video-controls.js
           node --check sw.js
           node --check workers/drive-oauth-bridge.mjs
           node tests/test_model_index.js
           node tests/test_model_capabilities.js
+          node tests/test_image_edit.js
+          node tests/test_drive_client.js
+          node tests/test_video_controls.js
+          node tests/test_library_controls.js
 
       - name: Verify Google API website contract
         run: |

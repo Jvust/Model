@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from runtime.hardware import (
     _parse_cuda_version,
@@ -38,7 +39,11 @@ class HardwareStatusTests(unittest.TestCase):
         self.assertIn("total_bytes", status)
 
     def test_gguf_preflight_accepts_small_model(self):
-        with tempfile.TemporaryDirectory() as temp:
+        # This is a success-path unit test, not a live host RAM requirement.
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "runtime.hardware.system_memory_status",
+            return_value={"available_bytes": 8 * 1024**3, "total_bytes": 16 * 1024**3},
+        ):
             status = gguf_preflight(
                 Path(temp),
                 expected_bytes=1024,

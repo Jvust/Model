@@ -117,7 +117,7 @@
     const response = await fetch(
       "https://www.googleapis.com/drive/v3/files?" + params.toString(),
       {
-        headers: { Authorization: "Bearer " + accessToken },
+        headers: authHeaders(accessToken, resourceKey, folderId),
         cache: "no-store"
       }
     );
@@ -211,15 +211,16 @@
     if (!accessToken) throw new Error("Google Drive 尚未授权。");
 
     const folderName = String(name || "").trim();
-    const parent = String(parentId || "root").trim() || "root";
+    // Explicit null finds nested linked folders; default lookup stays root-only.
+    const parent = parentId === null ? null : String(parentId || "root").trim() || "root";
     if (!folderName) throw new Error("文件夹名称不能为空。");
 
     const query = [
       "mimeType = '" + FOLDER_MIME + "'",
       "name = '" + escapeQueryLiteral(folderName) + "'",
-      "'" + escapeQueryLiteral(parent) + "' in parents",
+      parent === null ? null : "'" + escapeQueryLiteral(parent) + "' in parents",
       "trashed = false"
-    ].join(" and ");
+    ].filter(Boolean).join(" and ");
 
     const params = new URLSearchParams({
       q: query,
@@ -244,6 +245,9 @@
 
     const data = await response.json();
     const folders = Array.isArray(data.files) ? data.files : [];
+    if (parent === null && folders.length > 1) {
+      throw new Error("Drive 中有多个同名文件夹：" + folderName + "。请在主模型库中保留一个明确的模型包，避免选错文件。");
+    }
     return {
       folder: folders[0] || null,
       matches: folders
@@ -267,6 +271,7 @@
     };
 
     const queue = [rootNode];
+    const visitedFolders = new Set([rootFile.id]);
     let scannedFolders = 0;
     let modelFiles = 0;
     let supportFiles = 0;
@@ -283,7 +288,11 @@
       }
 
       let pageToken = "";
+      const seenPages = new Set();
+      const seenFiles = new Set();
       do {
+        if (seenPages.has(pageToken)) throw new Error("Drive 返回重复分页标记，请稍后重新扫描。");
+        seenPages.add(pageToken);
         const page = await listChildren(
           accessToken,
           node.file.id,
@@ -292,11 +301,18 @@
         );
 
         for (const file of page.files || []) {
+          if (!file.id || seenFiles.has(file.id)) continue;
+          seenFiles.add(file.id);
           const childPath = node.relativePath
             ? node.relativePath + "/" + file.name
             : file.name;
 
           if (file.mimeType === FOLDER_MIME) {
+            // Prune before issuing requests, not only after building the index.
+            const in2511 = (rootFile.name + "/" + childPath).toLowerCase().includes("qwen-image-edit-2511");
+            if (in2511 && [".cache", ".hf-cache", "offload", "inputs", "outputs"].includes(String(file.name).toLowerCase())) continue;
+            if (visitedFolders.has(file.id)) continue;
+            visitedFolders.add(file.id);
             const child = {
               file,
               relativePath: childPath,

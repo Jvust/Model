@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,7 +14,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 try:
@@ -287,34 +289,54 @@ def _set_widget(node: dict, index: int, value) -> None:
     node["widgets_values"] = values
 
 
+def validate_video_payload(adapter_key: str, payload: dict) -> dict:
+    """Validate before any backend/model download, preserving explicit zero CFG."""
+    defaults = ADAPTERS[adapter_key]["defaults"]
+    result = dict(payload)
+    for field, maximum in (("prompt", 12000), ("negative_prompt", 6000)):
+        value = payload.get(field, "")
+        if not isinstance(value, str) or len(value) > maximum:
+            raise ValueError(f"{field} 必须是长度不超过 {maximum} 的文本。")
+        result[field] = value.strip()
+    if not result["prompt"]:
+        raise ValueError("视频提示词不能为空。")
+    bounds = {"width": (256, 1920), "height": (256, 1080), "frames": (9, 241),
+              "fps": (1, 60), "steps": (1, 100), "seed": (0, 2**53 - 1)}
+    for field, (minimum, maximum) in bounds.items():
+        value = payload.get(field)
+        if value is None:
+            value = int(time.time() * 1000) % (2**53) if field == "seed" else defaults[field]
+        try:
+            number = int(value)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise ValueError(f"{field} 必须是整数。") from error
+        if isinstance(value, bool) or str(number) != str(value).strip() or not minimum <= number <= maximum:
+            raise ValueError(f"{field} 必须是 {minimum}–{maximum} 的整数。")
+        result[field] = number
+    if result["width"] % 16 or result["height"] % 16:
+        raise ValueError("视频宽高必须是 16 的倍数。")
+    if (result["frames"] - 1) % 4:
+        raise ValueError("视频帧数必须是 4n+1，范围 9–241。")
+    if adapter_key == "hunyuanvideo-1.5" and (result["width"], result["height"]) != (1280, 720):
+        raise ValueError("当前 HunyuanVideo 1.5 适配使用固定 1280×720 工作流。")
+    value = payload.get("cfg", defaults["cfg"])
+    try:
+        cfg = float(value)
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ValueError("cfg 必须在 0–20。") from error
+    if isinstance(value, bool) or not math.isfinite(cfg) or not 0 <= cfg <= 20:
+        raise ValueError("cfg 必须在 0–20。")
+    result["cfg"] = cfg
+    return result
+
+
 def customize_workflow(workflow: dict, adapter_key: str, payload: dict, job_id: str) -> tuple[dict, set[str]]:
     workflow = copy.deepcopy(workflow)
     adapter = ADAPTERS[adapter_key]
-    defaults = adapter["defaults"]
-
-    prompt_text = str(payload.get("prompt") or "").strip()
-    if not prompt_text:
-        raise ValueError("视频提示词不能为空。")
-    negative = str(payload.get("negative_prompt") or "").strip()
-
-    width = int(payload.get("width") or defaults["width"])
-    height = int(payload.get("height") or defaults["height"])
-    frames = int(payload.get("frames") or defaults["frames"])
-    fps = int(payload.get("fps") or defaults["fps"])
-    steps = int(payload.get("steps") or defaults["steps"])
-    cfg = float(payload.get("cfg") or defaults["cfg"])
-    seed = int(payload.get("seed") if payload.get("seed") is not None else int(time.time() * 1000) % (2**53))
-
-    if width < 256 or height < 256 or width > 1920 or height > 1080:
-        raise ValueError("视频分辨率超出支持范围。")
-    if frames < 9 or frames > 241 or (frames - 1) % 4 != 0:
-        raise ValueError("视频帧数必须是 4n+1，范围 9–241。")
-    if fps < 1 or fps > 60:
-        raise ValueError("fps 必须在 1–60。")
-    if steps < 1 or steps > 100:
-        raise ValueError("steps 必须在 1–100。")
-    if cfg < 0 or cfg > 20:
-        raise ValueError("cfg 必须在 0–20。")
+    payload = validate_video_payload(adapter_key, payload)
+    prompt_text, negative = payload["prompt"], payload["negative_prompt"]
+    width, height, frames = payload["width"], payload["height"], payload["frames"]
+    fps, steps, cfg, seed = payload["fps"], payload["steps"], payload["cfg"], payload["seed"]
 
     if adapter_key == "wan2.2-ti2v-5b":
         # Template includes an optional example start image. Remove it for text-to-video.
@@ -412,6 +434,7 @@ class VideoRuntime:
         self.error: str | None = None
         self.started_at: float | None = None
         self.finished_at: float | None = None
+        self.parameters: dict = {}
 
     def log(self, message: str) -> None:
         message = str(message).strip()
@@ -424,13 +447,12 @@ class VideoRuntime:
             total = self.download_total_bytes
             progress = (
                 min(1.0, self.downloaded_bytes / total)
-                if total and total > 0
+                if self.phase in {"preparing_comfyui", "downloading_models"} and total and total > 0
                 else None
             )
             running = bool(
                 self.job_thread
                 and self.job_thread.is_alive()
-                and self.phase not in {"complete", "failed", "cancelled"}
             )
             return {
                 "job_id": self.job_id,
@@ -444,11 +466,14 @@ class VideoRuntime:
                 "download_total_bytes": self.download_total_bytes,
                 "download_progress": progress,
                 "prompt_id": self.prompt_id,
-                "output_ready": bool(self.output_path and Path(self.output_path).exists()),
+                "output_ready": bool(self.phase == "complete" and self.output_path and Path(self.output_path).is_file() and Path(self.output_path).stat().st_size > 0),
                 "output_name": Path(self.output_path).name if self.output_path else None,
                 "error": self.error,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
+                "elapsed_seconds": round(max(0, (self.finished_at or time.time()) - self.started_at), 1) if self.started_at else 0,
+                "parameters": dict(self.parameters),
+                "duration_seconds": round(self.parameters["frames"] / self.parameters["fps"], 2) if self.parameters else None,
                 "logs": list(self.logs)[-30:],
                 "supported_adapters": [
                     {"id": key, "label": value["label"]}
@@ -468,6 +493,7 @@ class VideoRuntime:
         if not matched:
             raise ValueError("这个视频模型还没有自动运行适配器。")
         adapter_key, adapter = matched
+        payload = validate_video_payload(adapter_key, payload)
 
         hardware = adapter_hardware(adapter)
         if not hardware["supported"]:
@@ -484,30 +510,50 @@ class VideoRuntime:
             self.phase = "starting"
             self.detail = "正在准备视频运行环境"
             self.started_at = time.time()
+            self.parameters = {name: payload[name] for name in ("width", "height", "frames", "fps", "steps", "cfg", "seed")}
             job_id = self.job_id
-
-        thread = threading.Thread(
-            target=self._run_job,
-            args=(job_id, adapter_key, dict(payload)),
-            daemon=True,
-        )
-        with self.lock:
+            thread = threading.Thread(
+                target=self._run_job,
+                args=(job_id, adapter_key, dict(payload)),
+                daemon=True,
+            )
             self.job_thread = thread
-        thread.start()
+            thread.start()
         return self.snapshot()
 
     def stop(self) -> dict:
-        self.cancel.set()
-        try:
-            json_request(COMFY_BASE + "/interrupt", method="POST", payload={}, timeout=2)
-        except Exception:
-            pass
         with self.lock:
+            thread = self.job_thread
+            if not thread or not thread.is_alive():
+                if self.phase == "cancelling":
+                    self.phase = "cancelled"
+                    self.detail = "任务已取消"
+                    self.finished_at = time.time()
+                return self.snapshot()
+            self.cancel.set()
+            prompt_id = self.prompt_id
             if self.phase not in {"idle", "complete", "failed"}:
+                self.phase = "cancelling"
+                self.detail = "正在停止视频任务，等待工作线程退出"
+        if prompt_id:
+            self._cancel_prompt(prompt_id)
+        if thread is not threading.current_thread():
+            thread.join(timeout=1)
+        with self.lock:
+            if self.phase == "cancelling" and not (self.job_thread and self.job_thread.is_alive()):
                 self.phase = "cancelled"
                 self.detail = "任务已取消"
                 self.finished_at = time.time()
         return self.snapshot()
+
+    def _cancel_prompt(self, prompt_id: str) -> None:
+        # v0.37.0 performs an atomic interrupt_if_running here. Do not fall
+        # back to /interrupt: old servers may ignore its prompt_id parameter.
+        for endpoint, payload in (("/queue", {"delete": [prompt_id]}), ("/api/jobs/" + quote(prompt_id, safe="") + "/cancel", {})):
+            try:
+                json_request(COMFY_BASE + endpoint, method="POST", payload=payload, timeout=2)
+            except Exception as error:
+                self.log("Could not cancel owned ComfyUI prompt; verify ComfyUI v0.37.0 or newer: " + repr(error))
 
     def shutdown(self) -> None:
         self.cancel.set()
@@ -522,18 +568,20 @@ class VideoRuntime:
 
     def output_file(self, job_id: str) -> Path:
         with self.lock:
-            if not self.job_id or job_id != self.job_id or not self.output_path:
+            if self.phase != "complete" or not self.job_id or job_id != self.job_id or not self.output_path:
                 raise FileNotFoundError("视频输出不存在。")
             path = Path(self.output_path).resolve()
         root = VIDEO_OUTPUT_ROOT.resolve()
         if os.path.commonpath([str(root), str(path)]) != str(root):
             raise ValueError("非法视频输出路径。")
-        if not path.exists() or not path.is_file():
+        if not path.is_file() or path.stat().st_size == 0:
             raise FileNotFoundError("视频输出文件不存在。")
         return path
 
     def _set_phase(self, phase: str, detail: str = "") -> None:
         with self.lock:
+            if self.cancel.is_set():
+                raise RuntimeError("任务已取消。")
             self.phase = phase
             self.detail = detail
         self.log(f"{phase}: {detail}")
@@ -561,6 +609,20 @@ class VideoRuntime:
 
         with response:
             status = int(getattr(response, "status", 200))
+            if status == 206:
+                # A valid total alone cannot prove that these bytes follow our partial.
+                content_range = str(response.headers.get("Content-Range") or "")
+                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range.strip())
+                if not match:
+                    raise RuntimeError(f"下载断点响应无效：{label} 缺少有效 Content-Range。")
+                start, end, total_range = map(int, match.groups())
+                length = response.headers.get("Content-Length")
+                if start != offset or end < start or end >= total_range or (
+                    length is not None and str(length) != str(end - start + 1)
+                ):
+                    raise RuntimeError(f"下载断点响应不匹配：{label}，原断点未改动。")
+            elif status != 200:
+                raise RuntimeError(f"下载响应状态无效 HTTP {status}: {label}")
             if offset and status != 206:
                 partial.unlink(missing_ok=True)
                 offset = 0
@@ -597,6 +659,10 @@ class VideoRuntime:
                         self.downloaded_bytes = downloaded
                         self.download_total_bytes = total
 
+        if total is not None and downloaded != total:
+            raise RuntimeError(f"下载未完成：{label} ({downloaded}/{total} 字节)，已保留断点。")
+        if downloaded == 0:
+            raise RuntimeError(f"下载返回空文件：{label}。")
         partial.replace(destination)
         with self.lock:
             self.downloaded_bytes = destination.stat().st_size
@@ -769,27 +835,21 @@ class VideoRuntime:
 
     def _resolve_history_output(self, comfy_root: Path, entry: dict, started: float) -> Path:
         outputs = entry.get("outputs") or {}
-        candidate = self._find_output_candidate(outputs)
+        output_node = ADAPTERS[self.adapter]["output_node"] if self.adapter in ADAPTERS else None
+        candidate = self._find_output_candidate(outputs.get(output_node, {}) if output_node else outputs)
+        output_dir = (comfy_root / "ComfyUI" / "output").resolve()
         if candidate:
             filename = str(candidate.get("filename") or "")
             subfolder = str(candidate.get("subfolder") or "")
             folder_type = str(candidate.get("type") or "output")
-            base = comfy_root / "ComfyUI" / ("output" if folder_type == "output" else folder_type)
-            path = (base / subfolder / filename).resolve()
-            if path.exists() and path.is_file():
+            path = (output_dir / subfolder / filename).resolve()
+            if folder_type != "output" or not path.is_relative_to(output_dir):
+                raise ValueError("ComfyUI 输出路径超出视频输出目录。")
+            if path.suffix.lower() not in {".mp4", ".webm", ".mkv", ".gif"}:
+                raise ValueError("ComfyUI 输出不是支持的视频文件。")
+            if path.is_file() and path.stat().st_size > 0:
                 return path
-
-        output_dir = comfy_root / "ComfyUI" / "output"
-        candidates = []
-        if output_dir.exists():
-            for ext in ("*.mp4", "*.webm", "*.mkv", "*.gif"):
-                candidates.extend(output_dir.rglob(ext))
-        candidates = [
-            p for p in candidates if p.is_file() and p.stat().st_mtime >= started - 5
-        ]
-        if not candidates:
-            raise RuntimeError("ComfyUI 已完成，但没有找到生成的视频文件。")
-        return max(candidates, key=lambda p: p.stat().st_mtime)
+        raise RuntimeError("ComfyUI 已完成，但当前任务的输出节点没有可用的视频文件。")
 
     def _wait_for_result(self, comfy_root: Path, prompt_id: str, started: float) -> Path:
         deadline = time.time() + VIDEO_TIMEOUT_SECONDS
@@ -807,7 +867,7 @@ class VideoRuntime:
                         "ComfyUI 生成失败：" + json.dumps(messages[-5:], ensure_ascii=False)
                     )
                 outputs = entry.get("outputs") or {}
-                if outputs:
+                if outputs and (status_str == "success" or status.get("completed") is True):
                     return self._resolve_history_output(comfy_root, entry, started)
 
             time.sleep(2)
@@ -837,12 +897,17 @@ class VideoRuntime:
             self._set_phase("generating", "ComfyUI 正在生成视频")
             generation_started = time.time()
             source = self._wait_for_result(portable, prompt_id, generation_started)
+            if self.cancel.is_set():
+                raise RuntimeError("任务已取消。")
 
             suffix = source.suffix.lower() or ".mp4"
             output = VIDEO_OUTPUT_ROOT / f"{job_id}{suffix}"
             shutil.copy2(source, output)
 
             with self.lock:
+                if self.cancel.is_set():
+                    output.unlink(missing_ok=True)
+                    raise RuntimeError("任务已取消。")
                 self.output_path = str(output)
                 self.phase = "complete"
                 self.detail = "视频生成完成"
@@ -852,6 +917,10 @@ class VideoRuntime:
             self.log(f"Video complete: {output.name}")
 
         except Exception as error:
+            # Timeout and local output failures must not leave the owned GPU
+            # prompt running after this worker releases the generation slot.
+            if self.prompt_id:
+                self._cancel_prompt(self.prompt_id)
             with self.lock:
                 if self.cancel.is_set():
                     self.phase = "cancelled"

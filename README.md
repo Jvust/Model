@@ -6,7 +6,17 @@ Google Drive is the canonical model vault. The website discovers model packages 
 
 **Google Drive for desktop is not required.**
 
+## Qwen-Image-Edit-2511 reference workspace (Runtime v0.17)
+
+The website now discovers the exact `Qwen-Image-Edit-2511` folder even when it is nested outside `AI-Model-Vault`. Its complete `model/` directory is recognized as a Diffusers package, not a single ComfyUI model file.
+
+Select **使用 2511 参考图编辑**, check the separate CUDA/Diffusers environment, then prepare the existing Drive package. Upload a PNG/JPEG/WebP and choose a subject-and-clothing-preserving background or lighting preset. The workspace supports seed, cancellation, original/result comparison and PNG download. Reference conditioning does not guarantee unchanged style or details; inspect the result.
+
+The packaged bridge does not bundle PyTorch or model weights. Configure `MODEL_DIFFUSERS_PYTHON` to a compatible CUDA Python environment. See [setup and limitations](docs/QWEN_2511_REFERENCE_EDIT.md). Local tests cover indexing, API validation and worker lifecycle using fixtures, not actual GPU image quality.
+
 ## Drive package manifests
+
+For the improved existing video workspace (validated parameters, clip duration/seed, accurate stop state, authenticated preview/download and owned history output), see [Video Runtime v0.17](docs/VIDEO_WORKSPACE_V17.md). New 14B/I2V adapters are not implied by this update.
 
 Directory-based model runtimes need more than weight files. Index v3 also preserves small JSON/TXT/YAML/YML support metadata and exposes `supportFiles` + `manifestFiles` without changing the existing weight-only `files` contract.
 
@@ -78,7 +88,7 @@ See `docs/DEFAULT_CHAT_BOOTSTRAP.md` for the exact invariant and verification fl
 
 ## One-time Windows install
 
-For normal use, open the [Runtime package workflow](https://github.com/Jvust/Model/actions/workflows/runtime-package-drive-api.yml), choose the latest successful run on `main`, download its `Model-Web-Runtime-…` artifact, extract it, then run:
+For normal use, open the [Runtime package workflow](https://github.com/Jvust1/Model/actions/workflows/runtime-package-drive-api.yml), choose the latest successful run on `main`, download its `Model-Web-Runtime-…` artifact, extract it, then run:
 
     runtime\Install.cmd
 

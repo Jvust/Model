@@ -16,7 +16,7 @@ $cacheDir = $CacheRoot
 $trayPidPath = Join-Path $baseDir "tray.pid"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runName = "JvustModelRuntime"
-$siteUrl = "https://jvust.github.io/Model/"
+$siteUrl = "https://jvust1.github.io/Model/"
 
 function Test-LlamaPath([string]$path) {
     return (

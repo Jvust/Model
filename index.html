@@ -7,9 +7,10 @@
   <meta name="description" content="通过 Google Drive API 浏览模型，本机 CPU/GPU 负责推理，并直接在网页聊天。" />
   <meta name="theme-color" content="#0b0f1d" />
   <link rel="icon" href="./assets/star.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./assets/model.css?v=10" />
+  <link rel="stylesheet" href="./assets/model.css?v=13" />
 </head>
 <body>
+  <a class="skip-link" href="#modelLibrary">跳到模型库</a>
   <header class="site-header shell">
     <div class="brand">
       <img src="./assets/star.svg" alt="" />
@@ -24,7 +25,7 @@
       <h1>Drive 里是一套模型库，<br /><span>网站自动判断该用哪个后端。</span></h1>
       <p>
         Google Drive API 负责模型发现、元数据和模型文件读取；网站读取 AI-Model-Vault/model_metadata.json，
-        把分片权重归并成模型包。GGUF 可直接聊天；已适配的 Wan2.2 / HunyuanVideo 视频模型可直接进入网页视频工作区。
+        把分片权重归并成模型包。GGUF 可直接聊天；2511 支持参考图场景编辑；已适配的视频模型可进入网页视频工作区。
       </p>
       <div class="hero-actions">
         <button id="loginBtn" data-icon="cloud" class="primary" type="button">连接 Google Drive</button>
@@ -102,7 +103,7 @@
       <div class="video-head">
         <div>
           <div class="kicker">LOCAL VIDEO</div>
-          <h2 id="videoTitle">本机工作区 · Video</h2>
+          <h2 id="videoTitle" tabindex="-1">本机工作区 · Video</h2>
           <p id="videoModelLabel">从模型库选择已适配的视频模型。</p>
         </div>
         <button id="videoCloseBtn" type="button">关闭工作区</button>
@@ -130,12 +131,14 @@
             <label>Seed <input id="videoSeed" type="number" step="1" placeholder="随机" /></label>
           </div>
 
+          <div id="videoDuration" class="note" aria-live="polite">预计视频时长 2.04 秒（不是生成耗时）</div>
           <div class="video-actions">
             <button id="videoGenerateBtn" class="primary" data-icon="play" type="button">生成视频</button>
             <button id="videoStopBtn" type="button" disabled>停止任务</button>
+            <button id="videoRefreshBtn" type="button">刷新任务状态</button>
           </div>
 
-          <div id="videoStatus" class="video-status">等待选择视频模型。</div>
+          <div id="videoStatus" class="video-status" role="status" aria-live="polite">等待选择视频模型。</div>
           <div class="video-progress-track" aria-hidden="true">
             <div id="videoProgressBar" class="video-progress-bar"></div>
           </div>
@@ -147,19 +150,40 @@
         <div class="video-preview">
           <div id="videoEmpty" class="video-empty">生成完成后，视频会直接显示在这里。</div>
           <video id="videoResult" controls playsinline preload="metadata" hidden></video>
+          <a id="videoDownload" class="video-download" hidden download="model-video.mp4">下载生成的视频</a>
+          <p class="note">关闭工作区不会停止任务；请使用“停止任务”。浏览器不支持的格式仍可下载播放。</p>
         </div>
       </div>
     </section>
 
-    <section>
+    <section id="modelLibrary" aria-labelledby="libraryTitle" tabindex="-1">
       <div class="library-head">
         <div>
-          <h2>模型库</h2>
+          <h2 id="libraryTitle">模型库</h2>
           <p>每个卡片代表一个模型包，而不是单个权重分片；“运行方案”会检查对应后端与本机环境。</p>
         </div>
-        <div id="modelCount">0 个模型包</div>
+        <div id="modelCount" role="status" aria-live="polite" aria-atomic="true">0 个模型包</div>
       </div>
-      <div id="modelList" class="model-list"></div>
+      <div class="library-controls" role="search" aria-label="筛选模型库">
+        <div class="field library-search">
+          <label for="modelSearch">搜索模型</label>
+          <input id="modelSearch" type="search" maxlength="200" placeholder="名称、后端、路径…" autocomplete="off" aria-controls="modelList" />
+        </div>
+        <div class="field">
+          <label for="modelType">模型类型</label>
+          <select id="modelType" aria-controls="modelList">
+            <option value="all">全部类型</option><option value="chat">聊天 / 代码</option>
+            <option value="image-generation">图像生成</option><option value="image-edit">图像编辑</option>
+            <option value="video-generation">视频生成</option><option value="vision">视觉 / OCR</option>
+            <option value="embedding">向量 / 重排</option><option value="timeseries">时序预测</option>
+            <option value="generic">其他模型</option>
+          </select>
+        </div>
+        <label class="library-toggle"><input id="modelFilesOnly" type="checkbox" /> 仅显示已发现文件</label>
+        <button id="resetModelFilters" type="button">重置筛选</button>
+      </div>
+      <p class="library-hint">文件已发现 ≠ 可以运行；请先查看“运行方案”及对应环境检查。筛选只读取本次或上次扫描索引，不会下载权重。</p>
+      <div id="modelList" class="model-list" aria-busy="false"></div>
     </section>
 
     <div class="note footer-note">
@@ -168,11 +192,14 @@
   </main>
 
   <script src="./assets/config.js?v=11"></script>
-  <script src="./assets/model-index.js?v=15"></script>
-  <script src="./assets/model-capabilities.js?v=5"></script>
-  <script src="./assets/drive-client.js?v=11"></script>
-  <script src="./assets/app.js?v=20"></script>
-  <script src="./assets/workspaces.js?v=6"></script>
+  <script src="./assets/model-index.js?v=16"></script>
+  <script src="./assets/model-capabilities.js?v=6"></script>
+  <script src="./assets/drive-client.js?v=13"></script>
+  <script src="./assets/video-controls.js?v=1"></script>
+  <script src="./assets/library-controls.js?v=1"></script>
+  <script src="./assets/app.js?v=23"></script>
+  <script src="./assets/image-edit.js?v=1"></script>
+  <script src="./assets/workspaces.js?v=7"></script>
   <script src="./assets/cache-ui.js?v=2"></script>
 </body>
 </html>

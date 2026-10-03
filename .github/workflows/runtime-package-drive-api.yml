@@ -30,7 +30,7 @@ jobs:
         shell: powershell
         run: |
           python -m pip install --disable-pip-version-check pyinstaller py7zr
-          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" runtime\local_bridge.py
+          python -m PyInstaller --onefile --name ModelRuntime --paths runtime --collect-all py7zr --add-data "runtime\workflows;workflows" --add-data "runtime\edit_worker.py;." runtime\local_bridge.py
           Copy-Item -Force dist\ModelRuntime.exe runtime\ModelRuntime.exe
 
       - name: Smoke test standalone Runtime EXE
@@ -42,7 +42,7 @@ jobs:
           $env:MODEL_SERVER_PORT = "8080"
           $stdout = "$env:RUNNER_TEMP\runtime-stdout.log"
           $stderr = "$env:RUNNER_TEMP\runtime-stderr.log"
-          $p = Start-Process -FilePath "runtime\ModelRuntime.exe" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          $p = Start-Process -FilePath "runtime\ModelRuntime.exe" -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
           try {
             $ok = $false
             for ($i = 0; $i -lt 40; $i++) {
@@ -89,8 +89,12 @@ jobs:
               throw "Package materializer should start idle."
             }
             $runtime = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/runtime" -TimeoutSec 3
-            if ([int]$runtime.runtime_version -lt 16) {
-              throw "Expected Runtime v0.16 Drive package manifest API."
+            if ([int]$runtime.runtime_version -lt 17) {
+              throw "Expected Runtime v0.17 reference editing and video lifecycle API."
+            }
+            $edit = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/edit/status" -TimeoutSec 3
+            if ($edit.adapter -ne "qwen_image_edit_2511" -or $edit.phase -ne "idle") {
+              throw "Expected idle Qwen 2511 edit adapter in packaged Runtime."
             }
             if ($runtime.remote_auth_required) {
               throw "Packaged Runtime should not require a remote token by default."
@@ -112,8 +116,8 @@ jobs:
               throw "Runtime NVIDIA probe result is missing."
             }
             $capabilities = Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/models/capabilities" -TimeoutSec 3
-            if (($capabilities.models | Measure-Object).Count -ne 27) {
-              throw "Packaged Runtime is missing the 27-model capability registry."
+            if (($capabilities.models | Measure-Object).Count -ne 28) {
+              throw "Packaged Runtime is missing the 28-model capability registry including 2511."
             }
           }
           finally {
@@ -167,6 +171,7 @@ jobs:
           Copy-Item -Force README.md "$root\README.md"
           Copy-Item -Force index.html "$root\index.html"
           Copy-Item -Recurse -Force assets "$root\assets"
+          Copy-Item -Recurse -Force docs "$root\docs"
           Copy-Item -Force sw.js "$root\sw.js"
 
       - name: Upload runtime package

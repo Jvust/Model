@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>2511 UI fixture · 无 GPU 推理</title><link rel="stylesheet" href="../assets/model.css?v=13"></head>
+<body><main class="shell"><h1>2511 编辑入口 · 界面测试</h1><p>使用合成文件清单；不连接个人 Drive，不下载权重，不执行 GPU 推理。</p><section class="chat-panel"></section></main>
+<script>
+window.ModelApp = {
+  runtimeFetch: async path => ({ok:true, json:async () => path.endsWith("environment")
+    ? {supported:false,detail:"界面测试：尚未配置 CUDA 编辑环境。"}
+    : {phase:"idle",package_path:"image_edit/Qwen-Image-Edit-2511"}}),
+  syncRuntimeDriveSession: async () => {}
+};
+</script>
+<script src="../assets/image-edit.js"></script><script src="../assets/workspaces.js"></script>
+<script>
+const fixturePath = "image_edit/Qwen-Image-Edit-2511";
+const fixtureNames = ["model_index.json", "transformer/config.json", "transformer/model.safetensors", "text_encoder/config.json", "text_encoder/model.safetensors", "vae/config.json", "vae/model.safetensors", "tokenizer/tokenizer_config.json", "scheduler/scheduler_config.json", "processor/preprocessor_config.json"];
+window.ModelWorkspaces.openModel({
+  id:"qwen_image_edit_2511",name:"Qwen-Image-Edit-2511",workspace:"image-edit",packagePath:fixturePath,
+  manifestFiles:fixtureNames.map((name,i) => ({id:"fixture-"+i,name:name.split("/").pop(),relativePath:fixturePath+"/model/"+name,size:100}))
+});
+</script>
+</body></html>
