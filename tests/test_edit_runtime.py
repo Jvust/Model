@@ -26,7 +26,6 @@ class PackageFixture:
         self.destination = self.root / package_cache_key(self.path)
         self.model = self.destination / "model" if nested else self.destination
         self.model.mkdir(parents=True)
-        (self.destination / ".jvust-package.json").write_text("{}")
         (self.model / "model_index.json").write_text(json.dumps({"_class_name": "QwenImageEditPlusPipeline"}))
         for component in ("transformer", "text_encoder", "vae", "tokenizer", "scheduler", "processor"):
             target = self.model / component
@@ -36,6 +35,12 @@ class PackageFixture:
             if component in ("transformer", "text_encoder", "vae"):
                 (target / "model.safetensors").write_bytes(b"fixture-only-not-real-weights")
         self.state = {"phase":"complete", "package_path":self.path, "package_dir":str(self.destination), "running":False}
+        self.write_manifest()
+
+    def write_manifest(self) -> None:
+        files = [{"relative_path": path.relative_to(self.destination).as_posix(), "size": path.stat().st_size}
+                 for path in self.destination.rglob("*") if path.is_file() and path.name != ".jvust-package.json"]
+        (self.destination / ".jvust-package.json").write_text(json.dumps({"schema_version": 1, "package_path": self.path, "files": files}))
 
     def snapshot(self) -> dict:
         return self.state.copy()
@@ -46,7 +51,9 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(decode_reference(REFERENCE), (PNG, ".png"))
 
     def test_jpeg_and_webp(self) -> None:
-        for mime, data, suffix in [("jpeg",b"\xff\xd8\xfffixture", ".jpg"),("webp",b"RIFF0000WEBPfixture", ".webp")]:
+        jpeg = b"\xff\xd8\xff\xc0\0\x0b\x08\0\x01\0\x01\x01\x01\x11\0\xff\xd9"
+        webp = b"RIFF" + (22).to_bytes(4, "little") + b"WEBPVP8X" + (10).to_bytes(4, "little") + bytes(10)
+        for mime, data, suffix in [("jpeg", jpeg, ".jpg"), ("webp", webp, ".webp")]:
             self.assertEqual(decode_reference("data:image/"+mime+";base64,"+base64.b64encode(data).decode()), (data,suffix))
 
     def test_rejects_remote_paths_html_and_bad_base64(self) -> None:
@@ -98,16 +105,19 @@ class PackageTests(unittest.TestCase):
 
     def test_wrong_pipeline_rejected(self) -> None:
         (self.package.model / "model_index.json").write_text('{"_class_name":"OtherPipeline"}')
+        self.package.write_manifest()
         with self.assertRaisesRegex(ValueError, "QwenImageEditPlusPipeline"):
             pipeline_directory(self.package.root, self.package.snapshot())
 
     def test_missing_weight_shard_rejected(self) -> None:
         (self.package.model / "transformer/model.safetensors.index.json").write_text(json.dumps({"weight_map":{"x":"missing.safetensors"}}))
+        self.package.write_manifest()
         with self.assertRaisesRegex(ValueError, "missing.safetensors"):
             pipeline_directory(self.package.root, self.package.snapshot())
 
     def test_shard_traversal_rejected(self) -> None:
         (self.package.model / "transformer/model.safetensors.index.json").write_text(json.dumps({"weight_map":{"x":"../../../../outside.safetensors"}}))
+        self.package.write_manifest()
         with self.assertRaises(ValueError):
             pipeline_directory(self.package.root, self.package.snapshot())
 

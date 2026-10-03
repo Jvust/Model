@@ -27,5 +27,28 @@ global.fetch = async (url, options) => {
   await assert.rejects(client.findFolderByName("fixture-token", "duplicate", null), /多个同名/);
   await assert.rejects(client.findFolderByName("", "folder", null), /尚未授权/);
   await assert.rejects(client.findFolderByName("fixture-token", "", null), /不能为空/);
+  const folder = "application/vnd.google-apps.folder";
+  window.DriveModelIndex = { isModelFile: f => f.name.endsWith(".safetensors"), isPackageSupportFile: f => f.name.endsWith(".json") };
+  let calls = [];
+  const root = { id: "root-fixture", name: "Qwen-Image-Edit-2511", mimeType: folder, resourceKey: "fixture-key" };
+  global.fetch = async (url, options) => {
+    calls.push(url);
+    if (!new URL(url).searchParams.has("q")) return { ok: true, json: async () => root };
+    assert.equal(options.headers["X-Goog-Drive-Resource-Keys"], "root-fixture/fixture-key");
+    return { ok: true, json: async () => ({ files: [
+      { id: "cache-fixture", name: "offload", mimeType: folder },
+      { id: "root-fixture", name: "cycle", mimeType: folder },
+      { id: "weights-fixture", name: "model.safetensors" },
+      { id: "weights-fixture", name: "model.safetensors" },
+      { id: "config-fixture", name: "config.json" }
+    ] }) };
+  };
+  const scan = await client.scanModelTree("fixture-token", root.id);
+  assert.equal(scan.scannedFolders, 1);
+  assert.equal(scan.modelFiles, 1);
+  assert.equal(scan.supportFiles, 1);
+  assert.equal(calls.length, 2, "cache directories and repeated folders must not be traversed");
+  global.fetch = async url => ({ ok: true, json: async () => new URL(url).searchParams.has("q") ? { files: [], nextPageToken: "repeated" } : root });
+  await assert.rejects(client.scanModelTree("fixture-token", root.id), /重复分页/);
   console.log("drive-client nested lookup tests passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

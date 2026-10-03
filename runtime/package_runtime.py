@@ -28,17 +28,19 @@ _COPY_FALLBACK_LIMIT = int(
 
 
 def _safe_package_path(value: str) -> str:
-    raw = str(value or "").replace("\\", "/").strip().strip("/")
+    raw = str(value or "").replace("\\", "/")
     path = PurePosixPath(raw)
-    if not raw or path.is_absolute() or ".." in path.parts:
+    if not raw or path.is_absolute() or any(part in {"", ".", ".."} for part in raw.split("/")):
         raise ValueError("Invalid package_path.")
-    if any(not part or ":" in part for part in path.parts):
+    reserved = {"con", "prn", "aux", "nul"} | {f"{prefix}{n}" for prefix in ("com", "lpt") for n in range(1, 10)}
+    if any(part.endswith((".", " ")) or any(c in '<>:"|?*' or ord(c) < 32 for c in part)
+           or part.split(".")[0].casefold() in reserved for part in path.parts):
         raise ValueError("Invalid package_path component.")
     return "/".join(path.parts)
 
 
 def _safe_relative_path(value: str, package_path: str) -> str:
-    raw = str(value or "").replace("\\", "/").strip().strip("/")
+    raw = _safe_package_path(value)
     path = PurePosixPath(raw)
     if not raw or path.is_absolute() or ".." in path.parts:
         raise ValueError("Invalid manifest relative_path.")
@@ -49,7 +51,7 @@ def _safe_relative_path(value: str, package_path: str) -> str:
     if normalized.startswith(prefix + "/"):
         normalized = normalized[len(prefix) + 1 :]
     local = PurePosixPath(normalized)
-    if not local.parts or ".." in local.parts or any(":" in p for p in local.parts):
+    if not local.parts or ".." in local.parts or any(":" in p for p in local.parts) or any(p.casefold().startswith(".jvust-package.json") for p in local.parts):
         raise ValueError("Invalid package-local path.")
     return "/".join(local.parts)
 
@@ -70,6 +72,8 @@ def normalize_manifest(payload: dict) -> tuple[str, list[dict]]:
     raw_files = payload.get("manifest_files")
     if not isinstance(raw_files, list) or not raw_files:
         raise ValueError("manifest_files must be a non-empty array.")
+    if len(raw_files) > 10000:
+        raise ValueError("Package manifest exceeds 10000 files.")
 
     files: list[dict] = []
     seen_paths: set[str] = set()
@@ -84,11 +88,12 @@ def normalize_manifest(payload: dict) -> tuple[str, list[dict]]:
         spec = DriveFileSpec.from_payload(raw)
         if spec.size is None:
             raise ValueError(f"{relative_path} is missing Drive file size.")
-        if relative_path in seen_paths:
+        path_key = relative_path.casefold()
+        if path_key in seen_paths:
             raise ValueError(f"Duplicate package path: {relative_path}")
         if spec.file_id in seen_ids:
             raise ValueError(f"Duplicate Drive file ID: {spec.file_id}")
-        seen_paths.add(relative_path)
+        seen_paths.add(path_key)
         seen_ids.add(spec.file_id)
         files.append(
             {
@@ -97,6 +102,9 @@ def normalize_manifest(payload: dict) -> tuple[str, list[dict]]:
             }
         )
 
+    for path in seen_paths:
+        if any(str(parent) in seen_paths for parent in PurePosixPath(path).parents if str(parent) != "."):
+            raise ValueError("Manifest file is also used as a parent directory.")
     files.sort(key=lambda item: item["relative_path"])
     return package_path, files
 
@@ -167,7 +175,6 @@ class PackageRuntime:
             running = bool(
                 self.thread
                 and self.thread.is_alive()
-                and self.phase not in {"complete", "failed", "cancelled"}
             )
             progress = (
                 min(1.0, self.downloaded_bytes / self.total_bytes)
@@ -193,13 +200,14 @@ class PackageRuntime:
                 "finished_at": self.finished_at,
             }
 
-    def stop(self) -> dict:
-        self.cancel.set()
+    def stop(self, package_path: str | None = None) -> dict:
         with self.lock:
-            if self.phase not in {"idle", "complete", "failed"}:
-                self.phase = "cancelled"
-                self.detail = "模型包物化已取消"
-                self.finished_at = time.time()
+            if package_path is not None and package_path != self.package_path:
+                raise ValueError("模型包任务已切换，请刷新状态后重试。")
+            if self.thread and self.thread.is_alive() and self.phase not in {"complete", "failed", "cancelled"}:
+                self.cancel.set()
+                self.phase = "cancelling"
+                self.detail = "正在取消模型包物化，等待当前文件操作退出"
         return self.snapshot()
 
     def start(self, payload: dict) -> dict:
@@ -220,14 +228,13 @@ class PackageRuntime:
             self.file_count = len(files)
             self.total_bytes = sum(int(item["spec"].size or 0) for item in files)
 
-        thread = threading.Thread(
-            target=self._run,
-            args=(package_path, files, token, destination),
-            daemon=True,
-        )
-        with self.lock:
+            thread = threading.Thread(
+                target=self._run,
+                args=(package_path, files, token, destination),
+                daemon=True,
+            )
             self.thread = thread
-        thread.start()
+            thread.start()
         return self.snapshot()
 
     def _package_progress(
@@ -299,10 +306,15 @@ class PackageRuntime:
                 for item in files
             ],
         }
-        (destination / ".jvust-package.json").write_text(
+        manifest_path = destination / ".jvust-package.json"
+        temporary = destination / ".jvust-package.json.tmp"
+        if manifest_path.is_symlink() or temporary.is_symlink():
+            raise ValueError("Package manifest must not be a symbolic link.")
+        temporary.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        temporary.replace(manifest_path)
 
     def _run(
         self,
@@ -312,7 +324,11 @@ class PackageRuntime:
         destination: Path,
     ) -> None:
         try:
+            if destination.is_symlink() or not destination.resolve().is_relative_to(self.root.resolve()):
+                raise ValueError("Package directory escapes package root.")
             destination.mkdir(parents=True, exist_ok=True)
+            # Invalidate a previous completion marker before replacing any file.
+            (destination / ".jvust-package.json").unlink(missing_ok=True)
             completed = 0
             cached_bytes = 0
 
@@ -343,6 +359,10 @@ class PackageRuntime:
                     )
 
                 target = destination.joinpath(*PurePosixPath(relative_path).parts)
+                if self.cancel.is_set():
+                    raise RuntimeError("任务已取消。")
+                if target.is_symlink() or not target.resolve().is_relative_to(destination.resolve()):
+                    raise ValueError("Manifest path escapes package directory.")
                 self._materialize_one(cached, target, size)
                 completed += size
                 with self.lock:
@@ -350,9 +370,10 @@ class PackageRuntime:
                     self.cached_bytes = cached_bytes
                     self.materialized_files = index
 
-            self._write_manifest(destination, package_path, files)
-
             with self.lock:
+                if self.cancel.is_set():
+                    raise RuntimeError("任务已取消。")
+                self._write_manifest(destination, package_path, files)
                 self.phase = "complete"
                 self.detail = "Drive 模型包已完整物化"
                 self.current_file = None

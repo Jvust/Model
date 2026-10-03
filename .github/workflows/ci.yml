@@ -34,6 +34,7 @@ jobs:
           node --check assets/app.js
           node --check assets/workspaces.js
           node --check assets/image-edit.js
+          node --check assets/library-controls.js
           node --check assets/video-controls.js
           node --check sw.js
           node --check workers/drive-oauth-bridge.mjs
@@ -42,6 +43,7 @@ jobs:
           node tests/test_image_edit.js
           node tests/test_drive_client.js
           node tests/test_video_controls.js
+          node tests/test_library_controls.js
 
       - name: Verify Google API website contract
         run: |

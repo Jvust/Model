@@ -685,19 +685,29 @@ class Handler(BaseHTTPRequestHandler):
         status = 200
 
         range_header = self.headers.get("Range") or ""
-        if range_header.startswith("bytes="):
-            value = range_header[6:].split(",", 1)[0].strip()
-            left, _, right = value.partition("-")
-            if left:
-                start = int(left)
-            if right:
-                end = int(right)
-            else:
-                end = min(size - 1, start + 8 * 1024 * 1024 - 1)
-            if start < 0 or end < start or start >= size:
+        # Single ranges include suffix requests used by media players. Unsupported
+        # multi-ranges are ignored (200), never silently treated as the first range.
+        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Range
+        if range_header.startswith("bytes=") and "," not in range_header:
+            value = range_header[6:].strip()
+            left, separator, right = value.partition("-")
+            valid = bool(separator and (left or right) and
+                         (not left or left.isascii() and left.isdecimal()) and
+                         (not right or right.isascii() and right.isdecimal()) and
+                         len(left) < 20 and len(right) < 20)
+            if valid:
+                if left:
+                    start = int(left)
+                    end = min(int(right), size - 1) if right else size - 1
+                else:
+                    suffix_length = int(right)
+                    start = max(0, size - suffix_length)
+                    valid = suffix_length > 0
+            if not valid or start < 0 or end < start or start >= size:
                 self.send_response(416)
                 self._cors_headers()
                 self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             end = min(end, size - 1)
@@ -925,16 +935,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/v1/edit/stop":
-                self._json(200, {"ok": True, "edit": EDIT.stop()})
+                result = EDIT.stop(job_id=payload.get("job_id")) if payload.get("job_id") else EDIT.stop()
+                self._json(200, {"ok": True, "edit": result})
                 return
 
             if path == "/v1/packages/materialize":
-                result = PACKAGE.start(payload)
+                with GENERATION_LOCK:
+                    if EDIT.snapshot().get("running"):
+                        raise ValueError("请先停止 2511 编辑，再重新准备模型包。")
+                    result = PACKAGE.start(payload)
                 self._json(202, {"ok": True, "package": result})
                 return
 
             if path == "/v1/packages/stop":
-                self._json(200, {"ok": True, "package": PACKAGE.stop()})
+                result = PACKAGE.stop(package_path=payload.get("package_path")) if payload.get("package_path") else PACKAGE.stop()
+                self._json(200, {"ok": True, "package": result})
                 return
 
             if path == "/v1/tasks/start":

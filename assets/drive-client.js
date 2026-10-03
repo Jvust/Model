@@ -117,7 +117,7 @@
     const response = await fetch(
       "https://www.googleapis.com/drive/v3/files?" + params.toString(),
       {
-        headers: { Authorization: "Bearer " + accessToken },
+        headers: authHeaders(accessToken, resourceKey, folderId),
         cache: "no-store"
       }
     );
@@ -271,6 +271,7 @@
     };
 
     const queue = [rootNode];
+    const visitedFolders = new Set([rootFile.id]);
     let scannedFolders = 0;
     let modelFiles = 0;
     let supportFiles = 0;
@@ -287,7 +288,11 @@
       }
 
       let pageToken = "";
+      const seenPages = new Set();
+      const seenFiles = new Set();
       do {
+        if (seenPages.has(pageToken)) throw new Error("Drive 返回重复分页标记，请稍后重新扫描。");
+        seenPages.add(pageToken);
         const page = await listChildren(
           accessToken,
           node.file.id,
@@ -296,11 +301,18 @@
         );
 
         for (const file of page.files || []) {
+          if (!file.id || seenFiles.has(file.id)) continue;
+          seenFiles.add(file.id);
           const childPath = node.relativePath
             ? node.relativePath + "/" + file.name
             : file.name;
 
           if (file.mimeType === FOLDER_MIME) {
+            // Prune before issuing requests, not only after building the index.
+            const in2511 = (rootFile.name + "/" + childPath).toLowerCase().includes("qwen-image-edit-2511");
+            if (in2511 && [".cache", ".hf-cache", "offload", "inputs", "outputs"].includes(String(file.name).toLowerCase())) continue;
+            if (visitedFolders.has(file.id)) continue;
+            visitedFolders.add(file.id);
             const child = {
               file,
               relativePath: childPath,

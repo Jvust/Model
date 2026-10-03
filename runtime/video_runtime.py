@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 try:
@@ -452,7 +453,6 @@ class VideoRuntime:
             running = bool(
                 self.job_thread
                 and self.job_thread.is_alive()
-                and self.phase not in {"complete", "failed"}
             )
             return {
                 "job_id": self.job_id,
@@ -466,7 +466,7 @@ class VideoRuntime:
                 "download_total_bytes": self.download_total_bytes,
                 "download_progress": progress,
                 "prompt_id": self.prompt_id,
-                "output_ready": bool(self.output_path and Path(self.output_path).exists()),
+                "output_ready": bool(self.phase == "complete" and self.output_path and Path(self.output_path).is_file() and Path(self.output_path).stat().st_size > 0),
                 "output_name": Path(self.output_path).name if self.output_path else None,
                 "error": self.error,
                 "started_at": self.started_at,
@@ -522,26 +522,38 @@ class VideoRuntime:
         return self.snapshot()
 
     def stop(self) -> dict:
-        self.cancel.set()
         with self.lock:
-            prompt_id = self.prompt_id if self.job_thread and self.job_thread.is_alive() else None
+            thread = self.job_thread
+            if not thread or not thread.is_alive():
+                if self.phase == "cancelling":
+                    self.phase = "cancelled"
+                    self.detail = "任务已取消"
+                    self.finished_at = time.time()
+                return self.snapshot()
+            self.cancel.set()
+            prompt_id = self.prompt_id
             if self.phase not in {"idle", "complete", "failed"}:
                 self.phase = "cancelling"
                 self.detail = "正在停止视频任务，等待工作线程退出"
         if prompt_id:
-            try:
-                json_request(COMFY_BASE + "/queue", method="POST", payload={"delete": [prompt_id]}, timeout=2)
-                json_request(COMFY_BASE + "/interrupt", method="POST", payload={}, timeout=2)
-            except Exception:
-                pass
-        if self.job_thread and self.job_thread is not threading.current_thread():
-            self.job_thread.join(timeout=1)
+            self._cancel_prompt(prompt_id)
+        if thread is not threading.current_thread():
+            thread.join(timeout=1)
         with self.lock:
             if self.phase == "cancelling" and not (self.job_thread and self.job_thread.is_alive()):
                 self.phase = "cancelled"
                 self.detail = "任务已取消"
                 self.finished_at = time.time()
         return self.snapshot()
+
+    def _cancel_prompt(self, prompt_id: str) -> None:
+        # v0.37.0 performs an atomic interrupt_if_running here. Do not fall
+        # back to /interrupt: old servers may ignore its prompt_id parameter.
+        for endpoint, payload in (("/queue", {"delete": [prompt_id]}), ("/api/jobs/" + quote(prompt_id, safe="") + "/cancel", {})):
+            try:
+                json_request(COMFY_BASE + endpoint, method="POST", payload=payload, timeout=2)
+            except Exception as error:
+                self.log("Could not cancel owned ComfyUI prompt; verify ComfyUI v0.37.0 or newer: " + repr(error))
 
     def shutdown(self) -> None:
         self.cancel.set()
@@ -597,6 +609,20 @@ class VideoRuntime:
 
         with response:
             status = int(getattr(response, "status", 200))
+            if status == 206:
+                # A valid total alone cannot prove that these bytes follow our partial.
+                content_range = str(response.headers.get("Content-Range") or "")
+                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range.strip())
+                if not match:
+                    raise RuntimeError(f"下载断点响应无效：{label} 缺少有效 Content-Range。")
+                start, end, total_range = map(int, match.groups())
+                length = response.headers.get("Content-Length")
+                if start != offset or end < start or end >= total_range or (
+                    length is not None and str(length) != str(end - start + 1)
+                ):
+                    raise RuntimeError(f"下载断点响应不匹配：{label}，原断点未改动。")
+            elif status != 200:
+                raise RuntimeError(f"下载响应状态无效 HTTP {status}: {label}")
             if offset and status != 206:
                 partial.unlink(missing_ok=True)
                 offset = 0
@@ -891,12 +917,10 @@ class VideoRuntime:
             self.log(f"Video complete: {output.name}")
 
         except Exception as error:
-            if self.cancel.is_set() and self.prompt_id:
-                try:
-                    json_request(COMFY_BASE + "/queue", method="POST", payload={"delete": [self.prompt_id]}, timeout=2)
-                    json_request(COMFY_BASE + "/interrupt", method="POST", payload={}, timeout=2)
-                except Exception:
-                    pass
+            # Timeout and local output failures must not leave the owned GPU
+            # prompt running after this worker releases the generation slot.
+            if self.prompt_id:
+                self._cancel_prompt(self.prompt_id)
             with self.lock:
                 if self.cancel.is_set():
                     self.phase = "cancelled"

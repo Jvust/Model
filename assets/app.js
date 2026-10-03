@@ -16,6 +16,11 @@
   let videoPollTimer = null;
   let videoOutputUrl = null;
   let videoViewEpoch = 0;
+  let videoPollEpoch = -1;
+  let videoCommandBusy = false;
+  let videoLastJobId = null;
+  let videoReturnFocus = null;
+  let scanBusy = false;
 
   const LINKED_MODEL_FOLDERS = [
     {
@@ -960,7 +965,9 @@
     }
 
     videoViewEpoch += 1;
+    stopVideoPolling();
     clearVideoResult();
+    videoReturnFocus = document.activeElement;
     selectedVideoModel = model;
     $("videoWorkspace").hidden = false;
     $("videoModelLabel").textContent =
@@ -977,12 +984,13 @@
     $("videoResult").hidden = true;
     $("videoResult").removeAttribute("src");
     $("videoEmpty").hidden = false;
-    $("videoGenerateBtn").disabled = false;
+    $("videoGenerateBtn").disabled = videoCommandBusy;
     $("videoStopBtn").disabled = true;
     setVideoStatus(
       "已选择 " + model.name + "。填写提示词后点击“生成视频”。"
     );
-    $("videoWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("videoWorkspace").scrollIntoView({ behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    $("videoTitle").focus({ preventScroll: true });
     updateVideoDuration();
     if (runtimeState) pollVideoStatus();
   }
@@ -995,6 +1003,7 @@
     $("videoDownload").removeAttribute("href");
     if (videoOutputUrl) URL.revokeObjectURL(videoOutputUrl);
     videoOutputUrl = null;
+    videoLastJobId = null;
   }
 
   function updateVideoDuration() {
@@ -1007,6 +1016,8 @@
     clearVideoResult();
     selectedVideoModel = null;
     $("videoWorkspace").hidden = true;
+    if (videoReturnFocus?.isConnected) videoReturnFocus.focus();
+    videoReturnFocus = null;
   }
 
   function videoPhaseText(state) {
@@ -1030,11 +1041,23 @@
     return (labels[phase] || phase) + (detail ? " · " + detail : "");
   }
 
+  async function videoFetch(path, options = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    try {
+      return await runtimeFetch(path, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function pollVideoStatus() {
+    if (!selectedVideoModel || videoCommandBusy || videoPollEpoch === videoViewEpoch) return;
     stopVideoPolling();
     const epoch = videoViewEpoch;
+    videoPollEpoch = epoch;
     try {
-      const response = await runtimeFetch("/v1/video/status", {
+      const response = await videoFetch("/v1/video/status", {
         cache: "no-store"
       });
       const state = await response.json().catch(() => ({}));
@@ -1043,11 +1066,17 @@
         throw new Error(state.error || "无法读取视频任务状态。");
       }
 
+      if (typeof state.running !== "boolean" || typeof state.phase !== "string") {
+        throw new Error("Runtime 返回了不完整的视频状态，请更新 Runtime 后重试。");
+      }
       let progress =
         typeof state.download_progress === "number"
           ? state.download_progress
           : null;
       let text = videoPhaseText(state);
+      if (state.running && state.adapter && state.adapter !== videoAdapterFor(selectedVideoModel)?.id) {
+        text = "Runtime 正在执行另一模型任务（" + (state.model || state.adapter) + "） · " + text;
+      }
       if (state.elapsed_seconds != null && state.started_at) text += " · 已耗时 " + state.elapsed_seconds + " 秒";
       if (state.parameters?.seed != null) text += " · Seed " + state.parameters.seed;
 
@@ -1068,14 +1097,15 @@
 
       setVideoStatus(text, progress);
       $("videoStopBtn").disabled = !state.running;
-      $("videoGenerateBtn").disabled = !!state.running;
+      $("videoGenerateBtn").disabled = !!state.running || videoCommandBusy;
 
       if (state.phase === "complete" && state.job_id) {
-        if (state.adapter !== videoAdapterFor(selectedVideoModel)?.id) return;
-        const blob = await window.ModelVideoControls.fetchResult(runtimeFetch, state.job_id);
+        if (state.adapter !== videoAdapterFor(selectedVideoModel)?.id || state.job_id === videoLastJobId) return;
+        const blob = await window.ModelVideoControls.fetchResult(videoFetch, state.job_id);
         if (epoch !== videoViewEpoch || !selectedVideoModel) return;
         clearVideoResult();
         videoOutputUrl = URL.createObjectURL(blob);
+        videoLastJobId = state.job_id;
         const video = $("videoResult");
         video.src = videoOutputUrl;
         video.hidden = false;
@@ -1114,10 +1144,13 @@
       setVideoStatus("无法确认任务状态，正在重试；不会把连接中断当作完成。");
       $("videoGenerateBtn").disabled = true;
       videoPollTimer = setTimeout(pollVideoStatus, 3000);
+    } finally {
+      if (videoPollEpoch === epoch) videoPollEpoch = -1;
     }
   }
 
   async function generateVideo() {
+    if (videoCommandBusy || $("videoGenerateBtn").disabled) return;
     if (!selectedVideoModel) {
       showError("请先从模型库选择一个已适配的视频模型。");
       return;
@@ -1181,51 +1214,62 @@
     }
 
     videoViewEpoch += 1;
+    const epoch = videoViewEpoch;
+    videoCommandBusy = true;
+    stopVideoPolling();
     clearVideoResult();
     showError("");
     $("videoGenerateBtn").disabled = true;
-    $("videoStopBtn").disabled = false;
-    $("videoResult").hidden = true;
+    $("videoStopBtn").disabled = true;
     $("videoEmpty").hidden = false;
     setVideoStatus("正在提交视频任务…");
     setStatus("正在启动 " + selectedVideoModel.name + " 视频工作流…");
 
     try {
-      const response = await runtimeFetch("/v1/video/generate", {
+      const response = await videoFetch("/v1/video/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "视频任务启动失败：" + response.status);
-      }
-      await pollVideoStatus();
+      if (epoch !== videoViewEpoch || !selectedVideoModel) return;
+      if (!response.ok) throw new Error(data.error || "视频任务启动失败：" + response.status);
     } catch (error) {
+      if (epoch !== videoViewEpoch || !selectedVideoModel) return;
       showError(error);
-      $("videoGenerateBtn").disabled = false;
-      $("videoStopBtn").disabled = true;
-      setVideoStatus("视频任务启动失败。");
+      setVideoStatus("提交结果尚未确认；正在检查 Runtime，避免重复启动任务。");
+    } finally {
+      videoCommandBusy = false;
+      if (selectedVideoModel) await pollVideoStatus();
     }
   }
 
   async function stopVideo() {
+    if (videoCommandBusy || !selectedVideoModel || $("videoStopBtn").disabled) return;
+    videoCommandBusy = true;
+    videoViewEpoch += 1;
+    const epoch = videoViewEpoch;
     stopVideoPolling();
+    $("videoStopBtn").disabled = true;
+    $("videoGenerateBtn").disabled = true;
+    setVideoStatus("正在请求停止任务…");
     try {
-      const response = await runtimeFetch("/v1/video/stop", {
+      const response = await videoFetch("/v1/video/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}"
       });
       const data = await response.json().catch(() => ({}));
+      if (epoch !== videoViewEpoch || !selectedVideoModel) return;
       if (!response.ok) throw new Error(data.error || "停止视频任务失败。");
-      $("videoGenerateBtn").disabled = !!data.video?.running;
-      $("videoStopBtn").disabled = !data.video?.running;
       setVideoStatus(videoPhaseText(data.video || {}));
-      if (data.video?.running) videoPollTimer = setTimeout(pollVideoStatus, 1500);
     } catch (error) {
+      if (epoch !== videoViewEpoch || !selectedVideoModel) return;
       showError(error);
-      if (selectedVideoModel) videoPollTimer = setTimeout(pollVideoStatus, 1500);
+      setVideoStatus("停止结果尚未确认，正在重新检查 Runtime。");
+    } finally {
+      videoCommandBusy = false;
+      if (selectedVideoModel) await pollVideoStatus();
     }
   }
 
@@ -1373,13 +1417,30 @@
     const count = $("modelCount");
 
     list.textContent = "";
-    count.textContent = models.length + " 个模型包";
+    const visibleModels = window.ModelLibraryControls.filter(models, $("modelSearch").value, $("modelType").value, $("modelFilesOnly").checked);
+    const filtered = !!$("modelSearch").value.trim() || $("modelType").value !== "all" || $("modelFilesOnly").checked;
+    count.textContent = filtered ? "显示 " + visibleModels.length + " / " + models.length + " 个模型包" : models.length + " 个模型包";
+    $("resetModelFilters").disabled = !filtered;
 
     if (!models.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
       empty.textContent =
         "还没有模型索引。连接 Drive 后寻找 AI-Model-Vault，再扫描模型。";
+      list.appendChild(empty);
+      return;
+    }
+
+    if (!visibleModels.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      const message = document.createElement("p");
+      message.textContent = "没有符合筛选条件的模型。可以缩短关键词、更换类型或重置筛选。";
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.textContent = "重置筛选";
+      reset.addEventListener("click", resetModelFilters);
+      empty.append(message, reset);
       list.appendChild(empty);
       return;
     }
@@ -1392,7 +1453,7 @@
         model.backend === "llama.cpp"
     );
 
-    if (!hasChatGguf) {
+    if (!hasChatGguf && !filtered) {
       const card = document.createElement("article");
       card.className = "model-card";
 
@@ -1439,7 +1500,7 @@
       list.appendChild(card);
     }
 
-    for (const model of models) {
+    for (const model of visibleModels) {
       const card = document.createElement("article");
       card.className = "model-card";
 
@@ -1511,7 +1572,7 @@
         imageAdapter ? "网页图像适配已支持" : "",
         model.taskKind ? "llama.cpp 专用任务适配已支持" : "",
         Number(model.supportFileCount || 0)
-          ? "完整包清单 " + model.packageFileCount + " 文件"
+          ? "索引清单 " + model.packageFileCount + " 文件"
           : "",
         managedAdapter
           ? hardware.known
@@ -1702,7 +1763,18 @@
     }
   }
 
+  function resetModelFilters() {
+    $("modelSearch").value = "";
+    $("modelType").value = "all";
+    $("modelFilesOnly").checked = false;
+    renderModels();
+    $("modelSearch").focus();
+  }
+
   async function scanDrive() {
+    if (scanBusy) return;
+    scanBusy = true;
+    $("modelList").setAttribute("aria-busy", "true");
     showError("");
     const button = $("scanBtn");
     button.disabled = true;
@@ -1816,6 +1888,8 @@
       showError(error);
       setStatus("扫描失败");
     } finally {
+      scanBusy = false;
+      $("modelList").setAttribute("aria-busy", "false");
       button.disabled = false;
     }
   }
@@ -1987,6 +2061,10 @@
   });
 
   $("scanBtn").addEventListener("click", scanDrive);
+  $("modelSearch").addEventListener("input", renderModels);
+  $("modelType").addEventListener("change", renderModels);
+  $("modelFilesOnly").addEventListener("change", renderModels);
+  $("resetModelFilters").addEventListener("click", resetModelFilters);
 
   $("runtimeCheckBtn").addEventListener("click", async () => {
     saveRuntimeBase();
@@ -2007,9 +2085,10 @@
   $("videoGenerateBtn").addEventListener("click", generateVideo);
   $("videoStopBtn").addEventListener("click", stopVideo);
   $("videoCloseBtn").addEventListener("click", closeVideoWorkspace);
+  $("videoRefreshBtn").addEventListener("click", pollVideoStatus);
   $("videoFrames").addEventListener("input", updateVideoDuration);
   $("videoFps").addEventListener("input", updateVideoDuration);
-  window.addEventListener("pagehide", () => { stopVideoPolling(); clearVideoResult(); });
+  window.addEventListener("pagehide", closeVideoWorkspace);
 
   $("stopBtn").addEventListener("click", stopModel);
   $("clearChatBtn").addEventListener("click", clearChat);
@@ -2020,7 +2099,7 @@
   });
 
   $("chatInput").addEventListener("keydown", event => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       sendChat();
     }

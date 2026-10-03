@@ -15,9 +15,13 @@ This change refines the existing **Wan2.2 TI2V 5B text-to-video** and **HunyuanV
 
 ## Lifecycle and result integrity
 
-Stop reports `cancelling` while an actual worker is still exiting. It removes the owned queued prompt, interrupts its backend operation and prevents a cancelled task from becoming complete. Stopping an idle video workspace does not interrupt an unrelated ComfyUI image task. Image/video/edit starts share one arbitration lock.
+Stop reports `cancelling` while an actual worker is still exiting. It removes only the owned queued prompt and uses ComfyUI v0.37.0 `POST /api/jobs/{prompt_id}/cancel` to atomically interrupt that same running prompt. If an older server lacks this API, the error is logged with an upgrade request; it never falls back to global `/interrupt`. A cancelled task cannot become complete. Stopping an idle video workspace does not interrupt an unrelated ComfyUI image task. Image/video/edit starts share one arbitration lock.
 
-History output is resolved from the configured output node for the current prompt, constrained to ComfyUI's output directory and supported nonempty video files. A missing output is an error; the previous fallback to any recent video is removed. Incomplete downloads retain `.part` data instead of marking a truncated file ready.
+History output is resolved from the configured output node for the current prompt, constrained to ComfyUI's output directory and supported nonempty video files. A missing output is an error; the previous fallback to any recent video is removed. Incomplete downloads retain `.part` data instead of marking a truncated file ready. Resumed responses must start at the requested offset, and media suffix ranges return the actual last bytes.
+
+Browser requests are single-flight: double-clicks do not create duplicate jobs, stale responses after closing or switching views are ignored, and a lost submission response triggers status reconciliation before another submission. Completed results are reused instead of downloaded repeatedly.
+
+The pinned cancellation contract is verified against [ComfyUI v0.37.0 server source](https://github.com/Comfy-Org/ComfyUI/blob/v0.37.0/server.py#L857-L893).
 
 ## Upgrade and verification
 
